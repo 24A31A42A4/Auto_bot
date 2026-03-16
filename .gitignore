@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+start/
+
+# Project specific
+.env
+pdf_content.txt
+diag_whatsapp.py
+
+# Playwright
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# IDEs
+.vscode/
+.idea/
+*.swp
+*.swo
