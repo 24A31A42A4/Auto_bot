@@ -6,6 +6,9 @@ COPY backend/ .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+# 🔥 ADD THIS LINE (VERY IMPORTANT)
+RUN playwright install --with-deps
+
 ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 EXPOSE 8080
