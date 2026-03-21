@@ -6,7 +6,6 @@ __pycache__/
 venv/
 ENV/
 env/
-start/
 
 # Project specific
 .env
@@ -24,3 +23,13 @@ playwright/.cache/
 .idea/
 *.swp
 *.swo
+
+# Virtual Environment
+start/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.production

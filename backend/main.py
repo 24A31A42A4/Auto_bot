@@ -3,21 +3,34 @@ main.py — FastAPI entry point for AutoForm Bot.
 Defines all routes: webhook verification, message handling, user profile CRUD, and health check.
 """
 
+from dotenv import load_dotenv, find_dotenv
 import os
-from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
-from fastapi.responses import PlainTextResponse
-from pydantic import BaseModel
-from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
+from fastapi.middleware.cors import CORSMiddleware
 from src.webhook_handler import process_message
-from src.database import get_user, save_user, update_user
+from src.database import get_user, save_user, update_user, get_user_by_auth_id, increment_forms_filled, save_form_history, get_form_history
+from src.form_bot import fill_form
 
 app = FastAPI(title="AutoForm Bot", description="WhatsApp bot that auto-fills Google Forms using AI")
 
+# CORS middleware for React frontend
+FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[FRONTEND_URL],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
 # Verify token for Meta webhook setup (you can set any string)
 VERIFY_TOKEN = os.getenv("VERIFY_TOKEN", "autoform_bot_verify_token")
+
+# Global store for bot progress (in-memory for now)
+# Structure: { auth_id: { "logs": [], "result": None, "active": False } }
+bot_status = {}
 
 
 # ─── Webhook Endpoints ───────────────────────────────────────────────
@@ -162,3 +175,76 @@ async def get_user_profile(phone: str):
 async def health_check():
     """Health check endpoint for Render uptime monitoring."""
     return {"status": "ok", "service": "AutoForm Bot"}
+
+
+class FormRequest(BaseModel):
+    url: str
+
+@app.post("/api/fill-form")
+async def api_fill_form(request: Request, form_req: FormRequest, background_tasks: BackgroundTasks):
+    # Simple auth: Header "Authorization: Bearer <auth_id>"
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    
+    auth_id = auth_header.split(" ")[1]
+    user_profile = get_user_by_auth_id(auth_id)
+    
+    if not user_profile:
+        raise HTTPException(status_code=404, detail="User profile not found. Please complete registration.")
+
+    # Initialize status for this user
+    bot_status[auth_id] = {
+        "logs": ["Job started..."],
+        "result": None,
+        "active": True
+    }
+
+    def status_callback(msg: str):
+        if auth_id in bot_status:
+            bot_status[auth_id]["logs"].append(msg)
+
+    async def run_fill_task():
+        try:
+            full_result = await fill_form(form_req.url, user_profile, status_callback=status_callback)
+            score = full_result["score"]
+            title = full_result["title"]
+            score_url = full_result.get("score_url")
+            
+            bot_status[auth_id]["result"] = {
+                "score": score,
+                "score_url": score_url,
+                "title": title
+            }
+            bot_status[auth_id]["active"] = False
+            
+            # Save to history with score URL
+            save_form_history(auth_id, form_req.url, title, score, score_url=score_url)
+            
+            # If successful, increment counter
+            if "Score:" in score or "successfully" in score:
+                increment_forms_filled(user_profile["phone_number"])
+        except Exception as e:
+            bot_status[auth_id]["logs"].append(f"Error: {str(e)}")
+            bot_status[auth_id]["active"] = False
+
+    background_tasks.add_task(run_fill_task)
+    return {"message": "Form filling started", "auth_id": auth_id}
+
+@app.get("/api/status/{auth_id}")
+async def get_bot_status(auth_id: str):
+    if auth_id not in bot_status:
+        return {"logs": [], "result": None, "active": False}
+    return bot_status[auth_id]
+
+@app.get("/api/history/{auth_id}")
+async def get_history(auth_id: str):
+    history = get_form_history(auth_id)
+    return history
+
+
+@app.get("/api/stats/{auth_id}")
+async def get_stats(auth_id: str):
+    from src.database import get_user_stats
+    stats = get_user_stats(auth_id)
+    return stats

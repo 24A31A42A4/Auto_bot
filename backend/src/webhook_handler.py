@@ -237,9 +237,10 @@ def generate_chat_reply(user_message: str, user_name: str) -> str:
     """
     from google import genai
     import os
-    from dotenv import load_dotenv
+    from dotenv import load_dotenv, find_dotenv
+    import os
 
-    load_dotenv()
+    load_dotenv(find_dotenv())
     client = genai.Client(api_key=os.getenv("gemini_api_key"))
     
     models_to_try = [

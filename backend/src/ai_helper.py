@@ -4,9 +4,9 @@ import re
 import time
 from google import genai
 from google.genai import types
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 def get_client():
     return genai.Client(api_key=os.getenv("gemini_api_key"))
@@ -58,6 +58,8 @@ def answer_questions(questions: list[dict], user_profile: dict = None, form_titl
         "1. READ each question VERY CAREFULLY. Identify what is being asked.\n"
         "2. For MULTIPLE CHOICE questions:\n"
         "   - Your answer MUST be the EXACT text of one of the given options.\n"
+        "   - Note: Option prefixes like 'A)', 'B.' have been STRIPPED from the options list to help you focus on the actual content.\n"
+        "   - Return ONLY the exact content string of the option you choose (e.g., '10.5%'). Do NOT return just 'A' or 'Option A'.\n"
         "   - Copy the option text EXACTLY — same spelling, capitalization, and punctuation.\n"
         "   - Do NOT paraphrase or rewrite the option.\n"
         "   - Eliminate wrong options first, then pick the best remaining one.\n"
