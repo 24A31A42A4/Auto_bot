@@ -5,9 +5,9 @@ Sends WhatsApp messages via the Meta Graph API using httpx (async).
 
 import os
 import httpx
-from dotenv import load_dotenv
+from dotenv import load_dotenv, find_dotenv
 
-load_dotenv()
+load_dotenv(find_dotenv())
 
 ACCESS_TOKEN = os.getenv("Acess_token")
 PHONE_NUMBER_ID = os.getenv("phone_no_id")

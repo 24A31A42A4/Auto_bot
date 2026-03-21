@@ -53,7 +53,8 @@ const Profile = () => {
   const fetchStats = async () => {
     if (!user) return
     try {
-      const res = await fetch(`http://localhost:8000/api/stats/${user.id}`)
+      const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+      const res = await fetch(`${apiUrl}/api/stats/${user.id}`)
       if (res.ok) {
         const data = await res.json()
         setStats(data)
