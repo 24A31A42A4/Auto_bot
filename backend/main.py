@@ -182,7 +182,7 @@ async def health_check():
 class FormRequest(BaseModel):
     url: str
 
-@app.post("/api/fill-form")
+@app.post("/fill-form")
 async def api_fill_form(request: Request, form_req: FormRequest, background_tasks: BackgroundTasks):
     # Simple auth: Header "Authorization: Bearer <auth_id>"
     auth_header = request.headers.get("Authorization")
@@ -233,19 +233,19 @@ async def api_fill_form(request: Request, form_req: FormRequest, background_task
     background_tasks.add_task(run_fill_task)
     return {"message": "Form filling started", "auth_id": auth_id}
 
-@app.get("/api/status/{auth_id}")
+@app.get("/status/{auth_id}")
 async def get_bot_status(auth_id: str):
     if auth_id not in bot_status:
         return {"logs": [], "result": None, "active": False}
     return bot_status[auth_id]
 
-@app.get("/api/history/{auth_id}")
+@app.get("/history/{auth_id}")
 async def get_history(auth_id: str):
     history = get_form_history(auth_id)
     return history
 
 
-@app.get("/api/stats/{auth_id}")
+@app.get("/stats/{auth_id}")
 async def get_stats(auth_id: str):
     from src.database import get_user_stats
     stats = get_user_stats(auth_id)

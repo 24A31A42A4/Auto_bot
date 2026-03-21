@@ -21,7 +21,7 @@ const Dashboard = () => {
     if (!user) return
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-      const res = await fetch(`${apiUrl}/api/history/${user.id}`)
+      const res = await fetch(`${apiUrl}/history/${user.id}`)
       if (res.ok) {
         const data = await res.json()
         setHistory(data)
@@ -51,7 +51,7 @@ const Dashboard = () => {
       interval = setInterval(async () => {
         try {
           const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-          const res = await fetch(`${apiUrl}/api/status/${user.id}`)
+          const res = await fetch(`${apiUrl}/status/${user.id}`)
           if (res.ok) {
             const data = await res.json()
             setLogs(data.logs || [])
@@ -84,7 +84,7 @@ const Dashboard = () => {
 
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/api/fill-form`, {
+      const response = await fetch(`${apiUrl}/fill-form`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
