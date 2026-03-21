@@ -14,5 +14,5 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 # Expose the port (Railway uses PORT env var, but we default to 8080)
 EXPOSE 8080
 
-# Command to run the app
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Command to run the app — use Railway's dynamic PORT or default to 8080
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
