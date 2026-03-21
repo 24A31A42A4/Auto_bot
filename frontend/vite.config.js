@@ -5,4 +5,15 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   envDir: '../',
+
+  server: {
+    host: true
+  },
+
+  preview: {
+    host: true,
+    allowedHosts: [
+      'autobot-form-filler-vijay.up.railway.app'
+    ]
+  }
 })
