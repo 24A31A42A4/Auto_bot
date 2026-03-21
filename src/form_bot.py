@@ -114,6 +114,19 @@ async def _process_form_pages(page: Page, user_profile: dict) -> str:
         if next_button:
             await next_button.click()
             await page.wait_for_timeout(2000)
+            
+            # Check for validation errors preventing page advance
+            errors = await page.query_selector_all('div[role="alert"]')
+            error_texts = []
+            for err in errors:
+                err_text = await err.inner_text()
+                if err_text.strip():
+                    error_texts.append(err_text.strip())
+            
+            if error_texts:
+                print(f"[form_bot] Validation errors prevented advancing to page {page_num + 1}: {', '.join(error_texts)}")
+                break
+            
             page_num += 1
             continue
 
@@ -262,7 +275,7 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
         await page.wait_for_timeout(200)
 
         if q_type == "short_text":
-            input_el = await block.query_selector('input[type="text"], input:not([type])')
+            input_el = await block.query_selector('input[type="text"], input[type="email"], input[type="number"], input[type="url"], input:not([type])')
             if input_el:
                 await input_el.scroll_into_view_if_needed()
                 await input_el.click()
@@ -271,6 +284,7 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
         elif q_type == "paragraph":
             textarea = await block.query_selector("textarea")
             if textarea:
+                await textarea.scroll_into_view_if_needed()
                 await textarea.click()
                 await textarea.fill(answer)
 
@@ -310,8 +324,19 @@ async def _select_option(block: ElementHandle, answer: str, role: str) -> None:
     options = await block.query_selector_all(f'div[role="{role}"]')
 
     for opt in options:
-        opt_text = (await opt.inner_text()).strip().lower()
-        if opt_text == answer_lower or answer_lower in opt_text or opt_text in answer_lower:
+        opt_text = ""
+        data_val = await opt.get_attribute("data-value")
+        aria_label = await opt.get_attribute("aria-label")
+        
+        if data_val:
+            opt_text = data_val.strip().lower()
+        elif aria_label:
+            opt_text = aria_label.strip().lower()
+        else:
+            opt_text = (await opt.inner_text()).strip().lower()
+
+        if opt_text and (opt_text == answer_lower or answer_lower in opt_text or opt_text in answer_lower):
+            await opt.scroll_into_view_if_needed()
             await opt.click()
             return
 
