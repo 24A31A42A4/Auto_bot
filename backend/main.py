@@ -2,7 +2,8 @@
 main.py — FastAPI entry point for AutoForm Bot.
 Defines all routes: webhook verification, message handling, user profile CRUD, and health check.
 """
-from fastapi import FastAPI,Request,BackgroundTasks,HTTPException,Response,PlainTextResponse
+from fastapi import FastAPI, Request, BackgroundTasks, HTTPException
+from starlette.responses import Response, PlainTextResponse
 from dotenv import load_dotenv, find_dotenv
 import os
 
