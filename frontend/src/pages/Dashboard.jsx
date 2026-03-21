@@ -327,7 +327,7 @@ const Dashboard = () => {
                       <div className="text-[10px] font-black uppercase tracking-widest text-gray-700">No neural records found.</div>
                     </div>
                   ) : (
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-1 gap-4">
+                    <div className="flex flex-col gap-4">
                       {history.map((item, index) => {
                         const scoreDisplay = parseScore(item.score);
                         return (
@@ -338,11 +338,11 @@ const Dashboard = () => {
                           >
                             <div className="absolute top-0 right-0 w-24 h-24 bg-primary/5 blur-2xl rounded-full -mr-8 -mt-8 group-hover:bg-primary/10 transition-all" />
                             
-                            <div className="flex flex-col sm:flex-row justify-between sm:items-start mb-6 relative z-10 gap-4">
-                              <div className="flex flex-col gap-2 flex-1 min-w-0 pr-4">
+                            <div className="flex flex-col gap-4 mb-6 relative z-10 w-full">
+                              <div className="flex flex-col gap-2 w-full pr-2">
                                 <div className="flex items-center gap-2">
                                   <Clock size={10} className="text-gray-600 shrink-0" />
-                                  <span className="text-[8px] font-black text-gray-600 uppercase tracking-widest truncate">
+                                  <span className="text-[8px] font-black text-gray-600 uppercase tracking-widest break-words leading-tight">
                                     {new Date(item.filled_at).toLocaleDateString()} • {new Date(item.filled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                   </span>
                                 </div>
@@ -350,12 +350,14 @@ const Dashboard = () => {
                                   {item.form_title || 'Neural Record'}
                                 </h4>
                               </div>
-                              <div className={`shrink-0 self-start px-3 py-1.5 rounded-xl text-[10px] sm:text-[11px] font-black border ${
-                                 scoreDisplay?.includes('/') 
-                                  ? 'bg-primary/20 border-primary/30 text-primary text-glow' 
-                                  : 'bg-white/5 border-white/10 text-gray-400'
-                              }`}>
-                                {scoreDisplay}
+                              <div className="flex items-center">
+                                <span className={`inline-block px-3 py-1.5 rounded-xl text-[10px] sm:text-[11px] font-black border ${
+                                   scoreDisplay?.includes('/') 
+                                    ? 'bg-primary/20 border-primary/30 text-primary text-glow' 
+                                    : 'bg-white/5 border-white/10 text-gray-400'
+                                }`}>
+                                  {scoreDisplay}
+                                </span>
                               </div>
                             </div>
     
