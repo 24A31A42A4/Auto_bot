@@ -3,7 +3,7 @@ uvicorn[standard]
 httpx
 python-dotenv
 supabase
-playwright
+playwright==1.58.0
 google-genai
 Pillow
 pytest
