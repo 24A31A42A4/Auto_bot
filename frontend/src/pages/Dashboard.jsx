@@ -391,10 +391,7 @@ const Dashboard = () => {
                     </div>
                   )}
                 </div>
-                
-                <div className="p-6 border-t border-white/5 bg-black/20 text-center">
-                   <p className="text-[8px] font-black text-gray-700 uppercase tracking-[0.4em]">Neural Link Established v1.4</p>
-                </div>
+
               </div>
             </div>
         </div>
