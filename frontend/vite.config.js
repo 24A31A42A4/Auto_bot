@@ -6,11 +6,13 @@ export default defineConfig({
   envDir: '../',
 
   server: {
-    host: true
+    host: true,
+    port: 5173
   },
 
   preview: {
     host: true,
-    allowedHosts: true
+    allowedHosts: true,
+    port: 5173
   }
 })

@@ -1,16 +1,9 @@
 FROM mcr.microsoft.com/playwright/python:v1.58.0-jammy
 
 WORKDIR /app
-
 COPY backend/ .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
-# 🔥 ADD THIS LINE (VERY IMPORTANT)
-RUN playwright install --with-deps
-
-ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
-
 EXPOSE 8080
-
 CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-8080}"]
