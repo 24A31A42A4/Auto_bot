@@ -243,11 +243,9 @@ def generate_chat_reply(user_message: str, user_name: str) -> str:
     client = genai.Client(api_key=os.getenv("gemini_api_key"))
     
     models_to_try = [
-        "gemini-flash-latest",
-        "gemini-2.5-flash-lite",
-        "gemini-3-flash-preview",
-        "gemma-3-12b-it",
-        "gemma-3-4b-it"
+        "gemini-2.5-flash",
+        "gemini-2.0-flash",
+        "gemini-2.0-flash-lite",
     ]
     
     prompt = f"""You are AutoForm Bot, a friendly WhatsApp bot that helps college students 

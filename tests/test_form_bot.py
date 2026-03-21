@@ -42,9 +42,17 @@ class TestProfileDetector:
         assert detect_personal_field("Mobile Number") == "phone_number"
 
     def test_returns_none_for_quiz_questions(self):
+        """Critical: Quiz questions should NOT match as personal fields."""
         assert detect_personal_field("What is the capital of France?") is None
         assert detect_personal_field("Explain the concept of OOP") is None
         assert detect_personal_field("Which of the following is correct?") is None
+        # These were previously false positives:
+        assert detect_personal_field("Name the process of photosynthesis") is None
+        assert detect_personal_field("Name any two programming languages") is None
+        assert detect_personal_field("What is the name of the largest planet?") is None
+        assert detect_personal_field("Define the year of independence") is None
+        assert detect_personal_field("Which branch of science deals with motion?") is None
+        assert detect_personal_field("How many sections does the act have?") is None
 
     def test_get_profile_value(self):
         profile = {"name": "Rohit", "roll_number": "22EG1A0501", "section": "A"}

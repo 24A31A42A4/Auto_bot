@@ -63,13 +63,17 @@ async def _process_form_pages(page: Page, user_profile: dict) -> str:
     """Process all pages of a form (handles multi-page forms)."""
     page_num = 1
 
+    # Scrape form title/description for AI context
+    form_title = await _scrape_form_title(page)
+    print(f"[form_bot] Form title: '{form_title}'")
+
     while True:
         print(f"[form_bot] Processing page {page_num}...")
 
         # Scroll down to load all questions on this page
         await _scroll_to_bottom(page)
 
-        # Scrape questions on current page
+        # Scrape ONLY VISIBLE questions on current page
         questions = await _scrape_questions(page)
         print(f"[form_bot] Found {len(questions)} questions on page {page_num}")
 
@@ -97,16 +101,24 @@ async def _process_form_pages(page: Page, user_profile: dict) -> str:
                     }
                     for q in ai_questions
                 ]
-                ai_answers = answer_questions(ai_input, user_profile)
+                # Log what we're sending to AI
+                for i, inp in enumerate(ai_input):
+                    print(f"[form_bot] AI Input Q{i+1}: '{inp['question'][:60]}' | Options: {inp['options'][:4]}{'...' if len(inp['options']) > 4 else ''}")
+
+                ai_answers = answer_questions(ai_input, user_profile, form_title=form_title)
+
+                # Log what AI returned
+                for i, ans in enumerate(ai_answers):
+                    print(f"[form_bot] AI Answer Q{i+1}: '{ans}'")
 
             # Fill personal fields
             for item in personal_fields:
-                print(f"[form_bot] Filling personal field '{item['question']['question_text'][:20]}...' with: {item['value']}")
+                print(f"[form_bot] Filling personal field '{item['question']['question_text'][:30]}...' with: {item['value']}")
                 await _fill_field(page, item["question"], item["value"])
 
             # Fill AI-answered fields
             for q, answer in zip(ai_questions, ai_answers):
-                print(f"[form_bot] Filling AI field '{q['question_text'][:20]}...' with: {answer}")
+                print(f"[form_bot] Filling AI field '{q['question_text'][:30]}...' with: {answer}")
                 await _fill_field(page, q, answer)
 
         # Check for Next button (multi-page form)
@@ -137,7 +149,7 @@ async def _process_form_pages(page: Page, user_profile: dict) -> str:
         )
         if submit_button:
             await submit_button.click()
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(4000)
             break
         else:
             # Try alternative submit selectors
@@ -147,45 +159,158 @@ async def _process_form_pages(page: Page, user_profile: dict) -> str:
             )
             if submit_alt:
                 await submit_alt.click()
-                await page.wait_for_timeout(3000)
+                await page.wait_for_timeout(4000)
             break
 
-    # After submission, look for "View score" button
-    # This often opens in a new tab
-    view_score_button = await page.query_selector('a:has-text("View score"), span:has-text("View score")')
-    if view_score_button:
-        print("[form_bot] Found 'View score' button. Clicking...")
-        # Listen for the new page (tab) being opened
-        async with page.context.expect_page() as new_page_info:
-            await view_score_button.click()
-        
-        new_page = await new_page_info.value
-        await new_page.wait_for_load_state("networkidle")
-        await new_page.wait_for_timeout(2000)
-        
-        # Read score from the new page
-        result = await _read_score(new_page)
-        print(f"[form_bot] Score from new tab: {result}")
+    # Read the score from the post-submission page
+    return await _read_score_safely(page)
+
+
+async def _read_score_safely(page: Page) -> str:
+    """
+    Safely read the score after form submission.
+    Handles 'View score' button that may open a new tab.
+    """
+    try:
+        # Wait for the confirmation page to fully load
+        await page.wait_for_timeout(3000)
+
+        # PRIORITY 1: Look for "View score" link/button FIRST
+        # (Confirmation pages often still have leftover form text, so check View Score before anything else)
+        view_score_button = await page.query_selector(
+            'a:has-text("View score"), '
+            'a:has-text("View Score"), '
+            'span:has-text("View score"), '
+            'div[role="link"]:has-text("View score")'
+        )
+        if view_score_button:
+            print("[form_bot] Found 'View score' button. Clicking...")
+            try:
+                # Try to get href and navigate in same tab (most reliable)
+                href = await view_score_button.get_attribute("href")
+                if href:
+                    print(f"[form_bot] Navigating to score page: {href[:80]}...")
+                    await page.goto(href, wait_until="networkidle", timeout=20000)
+                    await page.wait_for_timeout(3000)
+                    result = await _read_score(page)
+                    print(f"[form_bot] Score result: {result}")
+                    return result
+
+                # No href — try clicking directly
+                # First try: see if it stays on same page
+                await view_score_button.click()
+                await page.wait_for_timeout(3000)
+                
+                # Check if the URL changed (score page loaded in same tab)
+                current_url = page.url
+                if "viewscore" in current_url.lower() or "viewanalytics" in current_url.lower():
+                    result = await _read_score(page)
+                    print(f"[form_bot] Score result (same tab): {result}")
+                    return result
+
+                # Check if a new page opened
+                pages = page.context.pages
+                if len(pages) > 1:
+                    new_page = pages[-1]  # Get the latest page
+                    await new_page.wait_for_load_state("networkidle")
+                    await new_page.wait_for_timeout(3000)
+                    result = await _read_score(new_page)
+                    print(f"[form_bot] Score from new tab: {result}")
+                    return result
+
+                # Still on same page — try reading score from current page
+                result = await _read_score(page)
+                print(f"[form_bot] Score after View Score click: {result}")
+                return result
+
+            except Exception as e:
+                print(f"[form_bot] Error reading score page: {e}")
+                # Fall through to read current page
+
+        # PRIORITY 2: Check if we see a "response recorded" or "thank you" message
+        page_text = await page.inner_text("body")
+        page_lower = page_text.lower()
+
+        if "your response has been recorded" in page_lower:
+            return "Form submitted successfully! (No score — this form is not graded)"
+
+        if "thank" in page_lower or "submitted" in page_lower:
+            # Try to find a score on this page anyway
+            result = await _read_score(page)
+            if "Could not" not in result:
+                return result
+            return "Form submitted successfully!"
+
+        # PRIORITY 3: Check if still on form page (submission may have failed)
+        # Only flag this if there's a visible Submit button still on the page
+        submit_still_visible = await page.query_selector(
+            'div[role="button"]:visible:has-text("Submit")'
+        )
+        if submit_still_visible:
+            print("[form_bot] WARNING: Submit button still visible — submission may have failed")
+            return "Form submission may have failed (still on form page)"
+
+        # Default: try to read score from whatever page we're on
+        result = await _read_score(page)
+        print(f"[form_bot] Final Analysis: {result}")
         return result
 
-    # Otherwise read from current page
-    result = await _read_score(page)
-    print(f"[form_bot] Final Analysis: {result}")
-    return result
+    except Exception as e:
+        print(f"[form_bot] Error in score reading: {e}")
+        return "Form submitted."
+
+
+async def _scrape_form_title(page: Page) -> str:
+    """Scrape the form title and description for AI context."""
+    try:
+        # Google Forms title is usually in a heading element
+        title_el = await page.query_selector(
+            'div[role="heading"][aria-level="1"], '
+            'div.freebirdFormviewerViewHeaderTitle, '
+            'div[data-item-id] div[role="heading"]'
+        )
+        if title_el:
+            title = (await title_el.inner_text()).strip()
+            if title and len(title) > 2:
+                # Also try to get description
+                desc_el = await page.query_selector(
+                    'div.freebirdFormviewerViewHeaderDescription, '
+                    'div[role="heading"] + div'
+                )
+                desc = ""
+                if desc_el:
+                    desc = (await desc_el.inner_text()).strip()
+                return f"{title} — {desc}" if desc else title
+
+        # Fallback: page title
+        page_title = await page.title()
+        if page_title and "google" not in page_title.lower():
+            return page_title
+    except Exception as e:
+        print(f"[form_bot] Error scraping form title: {e}")
+
+    return ""
 
 
 async def _scrape_questions(page: Page) -> list[dict]:
     """
-    Scrape all question blocks from the current page of a Google Form.
+    Scrape all VISIBLE question blocks from the current page of a Google Form.
+    Filters out hidden questions from previous pages.
     """
     questions = []
     question_blocks = await page.query_selector_all('div[role="listitem"]')
 
     for i, block in enumerate(question_blocks):
         try:
+            # CRITICAL: Skip hidden/invisible question blocks (from previous pages)
+            is_visible = await block.is_visible()
+            if not is_visible:
+                continue
+
             question_data = await _parse_question_block(page, block)
             if question_data:
-                print(f"[form_bot] Page Question {i+1}: '{question_data['question_text'][:40]}...' | Type: {question_data['type']}")
+                opts_preview = question_data['options'][:3] if question_data['options'] else []
+                print(f"[form_bot] Page Question {i+1}: '{question_data['question_text'][:50]}...' | Type: {question_data['type']} | Options: {opts_preview}")
                 questions.append(question_data)
         except Exception as e:
             print(f"[form_bot] Error parsing question block {i+1}: {e}")
@@ -197,7 +322,7 @@ async def _scrape_questions(page: Page) -> list[dict]:
 async def _parse_question_block(page: Page, block: ElementHandle) -> dict | None:
     """Parse a single question block and determine its type and content."""
 
-    # Get the question text
+    # Get the question text — try multiple selectors for robustness
     question_text_el = await block.query_selector(
         'div[role="heading"] span, '
         'div[data-params] > div > div > span'
@@ -224,7 +349,7 @@ async def _parse_question_block(page: Page, block: ElementHandle) -> dict | None
     if radio_options:
         q_type = "radio"
         for opt in radio_options:
-            opt_text = (await opt.inner_text()).strip()
+            opt_text = await _get_option_text(opt)
             if opt_text:
                 options.append(opt_text)
 
@@ -234,7 +359,7 @@ async def _parse_question_block(page: Page, block: ElementHandle) -> dict | None
         if checkbox_options:
             q_type = "checkbox"
             for opt in checkbox_options:
-                opt_text = (await opt.inner_text()).strip()
+                opt_text = await _get_option_text(opt)
                 if opt_text:
                     options.append(opt_text)
 
@@ -318,27 +443,40 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
 
 async def _select_option(block: ElementHandle, answer: str, role: str) -> None:
     """Select a radio or checkbox option by matching answer text."""
+    import re as _re
     answer_lower = answer.lower().strip()
+    answer_norm = _re.sub(r'[^\w\s]', '', answer_lower).strip()
 
     # Try to find the option by role
     options = await block.query_selector_all(f'div[role="{role}"]')
 
+    # First pass: exact match
     for opt in options:
-        opt_text = ""
-        data_val = await opt.get_attribute("data-value")
-        aria_label = await opt.get_attribute("aria-label")
-        
-        if data_val:
-            opt_text = data_val.strip().lower()
-        elif aria_label:
-            opt_text = aria_label.strip().lower()
-        else:
-            opt_text = (await opt.inner_text()).strip().lower()
-
-        if opt_text and (opt_text == answer_lower or answer_lower in opt_text or opt_text in answer_lower):
+        opt_text = await _get_option_text(opt)
+        if opt_text and opt_text.lower() == answer_lower:
             await opt.scroll_into_view_if_needed()
             await opt.click()
             return
+
+    # Second pass: normalized match (ignore punctuation)
+    for opt in options:
+        opt_text = await _get_option_text(opt)
+        if opt_text:
+            opt_norm = _re.sub(r'[^\w\s]', '', opt_text.lower()).strip()
+            if opt_norm == answer_norm:
+                await opt.scroll_into_view_if_needed()
+                await opt.click()
+                return
+
+    # Third pass: substring containment
+    for opt in options:
+        opt_text = await _get_option_text(opt)
+        if opt_text:
+            opt_lower = opt_text.lower().strip()
+            if answer_lower in opt_lower or opt_lower in answer_lower:
+                await opt.scroll_into_view_if_needed()
+                await opt.click()
+                return
 
     # Fallback: try clicking by label text
     labels = await block.query_selector_all("label, span")
@@ -354,6 +492,17 @@ async def _select_option(block: ElementHandle, answer: str, role: str) -> None:
         await options[0].click()
 
 
+async def _get_option_text(opt: ElementHandle) -> str:
+    """Extract the best text representation of an option element."""
+    data_val = await opt.get_attribute("data-value")
+    if data_val and data_val.strip():
+        return data_val.strip()
+    aria_label = await opt.get_attribute("aria-label")
+    if aria_label and aria_label.strip():
+        return aria_label.strip()
+    return (await opt.inner_text()).strip()
+
+
 async def _read_score(page: Page) -> str:
     """Read the score from the form confirmation/result page."""
     import re
@@ -361,40 +510,72 @@ async def _read_score(page: Page) -> str:
 
     try:
         page_text = await page.inner_text("body")
-        lines = [line.strip() for line in page_text.split("\n") if line.strip()]
         
         # DEBUG: Print confirmation page snippet
-        print(f"[form_bot] Confirmation page text snippet: {page_text[:300].replace('\n', ' ')}")
+        print(f"[form_bot] Confirmation page text snippet: {page_text[:500].replace(chr(10), ' ')}")
 
-        # 1. Look for specific Score/Points labels
-        total_points_match = re.search(r'(?:Total points|Score|Your score)[:\s]*(\d+)\s*/\s*(\d+)', page_text, re.IGNORECASE)
+        # SAFETY CHECK: Detect if we're still on the form page (not results)
+        still_on_form = (
+            "required question" in page_text.lower()
+            and ("next" in page_text.lower() or "submit" in page_text.lower())
+        )
+        if still_on_form:
+            return "Form submitted. Could not navigate to score page."
+
+        # 1. Look for specific Score/Points labels (most reliable)
+        total_points_match = re.search(
+            r'(?:Total\s+points|Total\s+score|Your\s+score|Score)\s*[:\s]\s*(\d+)\s*/\s*(\d+)',
+            page_text, re.IGNORECASE
+        )
         if total_points_match:
             return f"Score: {total_points_match.group(1)} / {total_points_match.group(2)}"
 
-        # 2. General fraction match but avoid date-like patterns (DD/MM/YYYY)
-        # We look for X / Y where Y is usually small or matches total questions
+        # 2. Look for "X out of Y" pattern
+        out_of_match = re.search(r'(\d+)\s+out\s+of\s+(\d+)', page_text, re.IGNORECASE)
+        if out_of_match:
+            return f"Score: {out_of_match.group(1)} / {out_of_match.group(2)}"
+
+        # 3. Look for "X / Y points" or "X/Y" near score-related words
+        score_fraction = re.search(
+            r'(?:scored?|points?|marks?|grade|result).*?(\d+)\s*/\s*(\d+)',
+            page_text[:1000], re.IGNORECASE
+        )
+        if score_fraction:
+            return f"Score: {score_fraction.group(1)} / {score_fraction.group(2)}"
+
+        # 4. Look for fraction patterns but filter dates aggressively
         fractions = re.findall(r'(\d+)\s*/\s*(\d+)', page_text)
         for num, total in fractions:
-            # Simple heuristic: If it looks like a date (e.g. 16/03/2026), skip it
-            # Dates usually have a 4-digit number right after or before
-            date_pattern = rf'{num}\s*/\s*{total}\s*/\s*\d{{4}}'
+            num_int, total_int = int(num), int(total)
+
+            # Skip date-like patterns (DD/MM/YYYY or MM/DD)
+            date_pattern = rf'{num}\s*/\s*{total}\s*/\s*\d{{2,4}}'
             if re.search(date_pattern, page_text):
                 continue
-            
-            # If total is something like "03", it's very likely a month from a date
-            if total in ["01", "02", "03", "04", "05", "06", "07", "08", "09", "10", "11", "12"]:
-                if re.search(rf'{num}\s*/\s*{total}\s*/', page_text): # and followed by another slash
-                    continue
-            
-            # If we passed date checks, return the first valid-looking fraction
+
+            # Skip if preceded by another number/slash (part of date)
+            pre_date = rf'\d+\s*/\s*{num}\s*/\s*{total}'
+            if re.search(pre_date, page_text):
+                continue
+
+            # Skip unreasonable scores (total > 200 or num > total*2)
+            if total_int > 200 or total_int == 0:
+                continue
+            if num_int > total_int * 2:
+                continue
+
+            # Skip likely year numbers
+            if total_int >= 1900 or num_int >= 1900:
+                continue
+
             return f"Score: {num} / {total}"
 
-        # 3. Look for "X points"
+        # 5. Look for "X points" or "X marks"
         points_match = re.search(r'(\d+)\s*(?:points?|marks?)', page_text, re.IGNORECASE)
         if points_match:
             return f"Score: {points_match.group(0)}"
 
-        # 4. Check status messages
+        # 6. Check status messages
         if "your response has been recorded" in page_text.lower():
             return "Form submitted successfully! (No score — this form is not graded)"
 
