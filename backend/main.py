@@ -19,10 +19,15 @@ app = FastAPI(title="AutoForm Bot", description="WhatsApp bot that auto-fills Go
 
 # CORS middleware for React frontend
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
+# Handle potential list of origins if provided as comma-separated string
+origins = [o.strip() for o in FRONTEND_URL.split(",") if o.strip()]
+if "http://localhost:5173" not in origins:
+    origins.append("http://localhost:5173")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[FRONTEND_URL],
-    allow_credentials=True,
+    allow_origins=["*"],  # Use wildcard for now to guarantee connectivity on Railway
+    allow_credentials=False, # Credentials (cookies) not needed for Bearer auth
     allow_methods=["*"],
     allow_headers=["*"],
 )
