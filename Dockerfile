@@ -5,6 +5,7 @@ COPY backend/ .
 
 RUN pip install --no-cache-dir -r requirements.txt
 
+ENV PLAYWRIGHT_BROWSERS_PATH=/pw-browsers
 RUN playwright install --with-deps chromium
 
 EXPOSE 8080
