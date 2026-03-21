@@ -338,19 +338,19 @@ const Dashboard = () => {
                           >
                             <div className="absolute top-0 right-0 w-24 h-24 bg-primary/5 blur-2xl rounded-full -mr-8 -mt-8 group-hover:bg-primary/10 transition-all" />
                             
-                            <div className="flex justify-between items-start mb-6 relative z-10">
-                              <div className="flex flex-col gap-2">
+                            <div className="flex flex-col sm:flex-row justify-between sm:items-start mb-6 relative z-10 gap-4">
+                              <div className="flex flex-col gap-2 flex-1 min-w-0 pr-4">
                                 <div className="flex items-center gap-2">
-                                  <Clock size={10} className="text-gray-600" />
-                                  <span className="text-[8px] font-black text-gray-600 uppercase tracking-widest">
+                                  <Clock size={10} className="text-gray-600 shrink-0" />
+                                  <span className="text-[8px] font-black text-gray-600 uppercase tracking-widest truncate">
                                     {new Date(item.filled_at).toLocaleDateString()} • {new Date(item.filled_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                   </span>
                                 </div>
-                                <h4 className="text-[13px] font-black text-white group-hover:text-primary transition-colors leading-tight">
+                                <h4 className="text-[14px] sm:text-[15px] font-black text-white group-hover:text-primary transition-colors leading-snug break-words">
                                   {item.form_title || 'Neural Record'}
                                 </h4>
                               </div>
-                              <div className={`shrink-0 px-3 py-1.5 rounded-xl text-[10px] font-black border ${
+                              <div className={`shrink-0 self-start px-3 py-1.5 rounded-xl text-[10px] sm:text-[11px] font-black border ${
                                  scoreDisplay?.includes('/') 
                                   ? 'bg-primary/20 border-primary/30 text-primary text-glow' 
                                   : 'bg-white/5 border-white/10 text-gray-400'
@@ -359,13 +359,13 @@ const Dashboard = () => {
                               </div>
                             </div>
     
-                            <div className="flex flex-col gap-3 relative z-10">
+                            <div className="flex flex-col gap-3 relative z-10 mt-auto">
                                {item.score_url && (
                                  <a 
                                    href={item.score_url} 
                                    target="_blank" 
                                    rel="noopener noreferrer"
-                                   className="w-full inline-flex items-center justify-center gap-3 px-4 py-4 rounded-2xl bg-primary text-white text-[10px] font-black uppercase tracking-[0.2em] hover:scale-[1.03] active:scale-[0.97] transition-all shadow-[0_15px_30px_-5px_rgba(0,191,255,0.3)] group/btn"
+                                   className="w-full inline-flex items-center justify-center gap-3 px-4 py-3 sm:py-4 rounded-2xl bg-primary text-black text-[10px] sm:text-[11px] font-black uppercase tracking-[0.2em] hover:scale-[1.02] active:scale-[0.98] transition-all shadow-[0_15px_30px_-5px_rgba(0,191,255,0.3)] group/btn"
                                  >
                                    View Form Score 
                                    <div className="p-1 rounded-md bg-white/20 group-hover/btn:bg-white/30 transition-colors">
@@ -378,7 +378,7 @@ const Dashboard = () => {
                                     href={item.form_url} 
                                     target="_blank" 
                                     rel="noopener noreferrer"
-                                    className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-gray-500 text-[9px] font-black uppercase tracking-widest hover:text-white hover:bg-white/10 transition-all"
+                                    className="flex-1 inline-flex items-center justify-center gap-2 px-4 py-3 rounded-xl bg-white/5 border border-white/10 text-gray-400 text-[10px] font-black uppercase tracking-widest hover:text-white hover:bg-white/10 transition-all"
                                   >
                                      {item.score_url ? <Zap size={10} fill="currentColor" /> : 'Open Form'}
                                      <span>{item.score_url ? 'Refill' : 'Source Link'}</span>
