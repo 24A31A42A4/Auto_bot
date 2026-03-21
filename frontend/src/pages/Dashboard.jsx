@@ -21,11 +21,14 @@ const Dashboard = () => {
     if (!user) return
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-      const res = await fetch(`${apiUrl}/history/${user.id}`)
-      if (res.ok) {
-        const data = await res.json()
-        setHistory(data)
+      const fetchUrl = `${apiUrl}/history/${user.id}`;
+      const res = await fetch(fetchUrl);
+      if (!res.ok) {
+        console.error(`Fetch error for ${fetchUrl}: ${res.status}`);
+        return;
       }
+      const data = await res.json();
+      setHistory(data);
     } catch (err) {
       console.error('History fetch error:', err)
     } finally {
@@ -51,7 +54,8 @@ const Dashboard = () => {
       interval = setInterval(async () => {
         try {
           const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-          const res = await fetch(`${apiUrl}/status/${user.id}`)
+          const fetchUrl = `${apiUrl}/status/${user.id}`;
+          const res = await fetch(fetchUrl);
           if (res.ok) {
             const data = await res.json()
             setLogs(data.logs || [])
@@ -84,7 +88,9 @@ const Dashboard = () => {
 
     try {
       const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-      const response = await fetch(`${apiUrl}/fill-form`, {
+      const fetchUrl = `${apiUrl}/fill-form`;
+      console.log(`Submitting form to: ${fetchUrl}`);
+      const response = await fetch(fetchUrl, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
