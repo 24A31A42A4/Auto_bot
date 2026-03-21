@@ -76,8 +76,8 @@ const Dashboard = () => {
 
   const handleFillForm = async (e) => {
     e.preventDefault()
-    if (!formUrl.includes('docs.google.com/forms')) {
-      setError('Please enter a valid Google Forms URL')
+    if (!formUrl.includes('docs.google.com/forms') && !formUrl.includes('forms.gle') && !formUrl.includes('tinyurl.com') && !formUrl.includes('bit.ly')) {
+      setError('Please enter a valid Google Forms URL or shortened link (tinyurl, forms.gle)')
       return
     }
 
