@@ -115,7 +115,6 @@ def save_feature_suggestion(auth_user_id: str, suggestion_type: str, title: str,
         print(f"[db] Error saving feature suggestion: {e}")
         raise Exception(f"Failed to save suggestion: {str(e)}")
 
-
 def get_form_history(auth_user_id: str) -> list[dict]:
     """Retrieve the most recent form submissions for a specific user."""
     try:
