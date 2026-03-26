@@ -20,6 +20,8 @@ def is_google_form_link(text: str) -> str | None:
     patterns = [
         r'(https?://forms\.gle/\S+)',
         r'(https?://docs\.google\.com/forms/\S+)',
+        r'(https?://tinyurl\.com/\S+)',
+        r'(https?://bit\.ly/\S+)',
     ]
     for pattern in patterns:
         match = re.search(pattern, text)

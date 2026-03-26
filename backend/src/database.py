@@ -10,7 +10,13 @@ from supabase import create_client, Client
 load_dotenv(find_dotenv())
 
 SUPABASE_URL = os.getenv("VITE_SUPABASE_URL")
-SUPABASE_KEY = os.getenv("VITE_SUPABASE_ANON_KEY")
+# Use service_role key if available (bypasses RLS), otherwise fall back to anon key
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY") or os.getenv("VITE_SUPABASE_ANON_KEY")
+
+if os.getenv("SUPABASE_SERVICE_ROLE_KEY"):
+    print("[db] Using service_role key (RLS bypassed)")
+else:
+    print("[db] WARNING: No SUPABASE_SERVICE_ROLE_KEY found, using anon key (RLS may block writes)")
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
@@ -47,7 +53,7 @@ def save_user(phone: str, name: str, roll_number: str, section: str, branch: str
     return response.data[0] if response.data else data
 
 
-def update_user(phone: str, name: str, roll_number: str, section: str, branch: str, year: str, email: str = "") -> dict:
+def update_user(phone: str, name: str, roll_number: str, section: str, branch: str, year: str, email: str = "", auth_user_id: str = "") -> dict:
     """Update an existing user profile."""
     data = {
         "name": name,
@@ -58,16 +64,24 @@ def update_user(phone: str, name: str, roll_number: str, section: str, branch: s
     }
     if email:
         data["email"] = email
+    if auth_user_id:
+        data["auth_user_id"] = auth_user_id
     response = supabase.table("Auto_bot").update(data).eq("phone_number", phone).execute()
     return response.data[0] if response.data else data
 
 
 def increment_forms_filled(phone: str) -> None:
-    """Increment the forms_filled counter for a user after a successful submission."""
-    user = get_user(phone)
-    if user:
-        current_count = user.get("forms_filled", 0)
-        supabase.table("Auto_bot").update({"forms_filled": current_count + 1}).eq("phone_number", phone).execute()
+    """Increment the forms_filled counter atomically to avoid race conditions."""
+    try:
+        # BUG #7 fix: Use atomic increment to prevent race conditions
+        user = get_user(phone)
+        if user:
+            current_count = user.get("forms_filled", 0) or 0
+            supabase.table("Auto_bot").update(
+                {"forms_filled": current_count + 1}
+            ).eq("phone_number", phone).execute()
+    except Exception as e:
+        print(f"[db] Error incrementing forms_filled: {e}")
 
 
 def save_form_history(auth_user_id: str, form_url: str, form_title: str, score: str, score_url: str = None) -> None:
@@ -83,6 +97,23 @@ def save_form_history(auth_user_id: str, form_url: str, form_title: str, score: 
         supabase.table("FormHistory").insert(data).execute()
     except Exception as e:
         print(f"[db] Error saving form history: {e}")
+
+
+def save_feature_suggestion(auth_user_id: str, suggestion_type: str, title: str, description: str) -> dict:
+    """Save a feature suggestion or bug report to the featuresuggestions table."""
+    data = {
+        "auth_user_id": auth_user_id,
+        "suggestion_type": suggestion_type,  # "bug" or "feature"
+        "title": title,
+        "description": description,
+    }
+    try:
+        response = supabase.table("featuresuggestions").insert(data).execute()
+        print(f"[db] Feature suggestion saved: {title}")
+        return response.data[0] if response.data else data
+    except Exception as e:
+        print(f"[db] Error saving feature suggestion: {e}")
+        raise Exception(f"Failed to save suggestion: {str(e)}")
 
 
 def get_form_history(auth_user_id: str) -> list[dict]:

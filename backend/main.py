@@ -7,12 +7,13 @@ from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv, find_dotenv
 import os
+import sys
 
 load_dotenv(find_dotenv())
 
 from fastapi.middleware.cors import CORSMiddleware
 from src.webhook_handler import process_message
-from src.database import get_user, save_user, update_user, get_user_by_auth_id, increment_forms_filled, save_form_history, get_form_history
+from src.database import get_user, save_user, update_user, get_user_by_auth_id, increment_forms_filled, save_form_history, get_form_history, save_feature_suggestion
 from src.form_bot import fill_form
 
 app = FastAPI(title="AutoForm Bot", description="WhatsApp bot that auto-fills Google Forms using AI")
@@ -175,6 +176,54 @@ async def get_user_profile(phone: str):
     return {"status": "found", "user": user}
 
 
+# ─── Profile Endpoints (by auth_user_id — used by frontend) ──────────
+
+
+class ProfileUpdate(BaseModel):
+    name: str
+    email: str = ""
+    roll_number: str
+    section: str
+    branch: str
+    year: str
+
+
+@app.get("/profile/{auth_id}")
+async def get_profile_by_auth(auth_id: str):
+    """Fetch a user profile by Supabase Auth ID. Used by frontend Profile page."""
+    user = get_user_by_auth_id(auth_id)
+    if not user:
+        raise HTTPException(status_code=404, detail="Profile not found")
+    return user
+
+
+@app.put("/profile/{auth_id}")
+async def update_profile_by_auth(auth_id: str, profile: ProfileUpdate):
+    """Update a user profile by auth_user_id. Bypasses RLS by going through backend."""
+    from src.database import supabase as db_client
+
+    # Verify user exists
+    existing = get_user_by_auth_id(auth_id)
+    if not existing:
+        raise HTTPException(status_code=404, detail="Profile not found")
+
+    update_data = {
+        "name": profile.name,
+        "email": profile.email,
+        "roll_number": profile.roll_number,
+        "section": profile.section,
+        "branch": profile.branch,
+        "year": profile.year,
+    }
+
+    response = db_client.table("Auto_bot").update(update_data).eq("auth_user_id", auth_id).execute()
+
+    if not response.data or len(response.data) == 0:
+        raise HTTPException(status_code=500, detail="Update failed — no rows modified")
+
+    return {"status": "updated", "user": response.data[0]}
+
+
 # ─── Health Check ─────────────────────────────────────────────────────
 
 
@@ -211,9 +260,21 @@ async def api_fill_form(request: Request, form_req: FormRequest, background_task
         if auth_id in bot_status:
             bot_status[auth_id]["logs"].append(msg)
 
-    async def run_fill_task():
+    def run_fill_in_thread():
+        """Run Playwright in a separate thread with its own event loop (Windows fix)."""
+        import asyncio as _asyncio
+        
+        # Windows: ProactorEventLoop is the ONLY loop type that supports subprocesses
+        if sys.platform == "win32":
+            loop = _asyncio.ProactorEventLoop()
+        else:
+            loop = _asyncio.new_event_loop()
+        _asyncio.set_event_loop(loop)
+        
         try:
-            full_result = await fill_form(form_req.url, user_profile, status_callback=status_callback)
+            full_result = loop.run_until_complete(
+                fill_form(form_req.url, user_profile, status_callback=status_callback)
+            )
             score = full_result["score"]
             title = full_result["title"]
             score_url = full_result.get("score_url")
@@ -234,8 +295,14 @@ async def api_fill_form(request: Request, form_req: FormRequest, background_task
         except Exception as e:
             bot_status[auth_id]["logs"].append(f"Error: {str(e)}")
             bot_status[auth_id]["active"] = False
+        finally:
+            loop.close()
 
-    background_tasks.add_task(run_fill_task)
+    # Run in a separate thread so Playwright gets its own event loop
+    import threading
+    thread = threading.Thread(target=run_fill_in_thread, daemon=True)
+    thread.start()
+    
     return {"message": "Form filling started", "auth_id": auth_id}
 
 @app.get("/status/{auth_id}")
@@ -255,3 +322,47 @@ async def get_stats(auth_id: str):
     from src.database import get_user_stats
     stats = get_user_stats(auth_id)
     return stats
+
+
+# ─── Feature Suggestion Endpoint ──────────────────────────────────
+
+class FeatureSuggestion(BaseModel):
+    suggestion_type: str  # "bug" or "feature"
+    title: str
+    description: str
+
+
+@app.post("/suggest")
+async def submit_suggestion(request: Request, suggestion: FeatureSuggestion):
+    """Submit a feature suggestion or bug report."""
+    # Get auth_id from header
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        raise HTTPException(status_code=401, detail="Missing or invalid Authorization header")
+    
+    auth_id = auth_header.split(" ")[1]
+    
+    # Validate inputs
+    if suggestion.suggestion_type not in ["bug", "feature"]:
+        raise HTTPException(status_code=400, detail="suggestion_type must be 'bug' or 'feature'")
+    
+    if not suggestion.title or len(suggestion.title.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Title cannot be empty")
+    
+    if not suggestion.description or len(suggestion.description.strip()) == 0:
+        raise HTTPException(status_code=400, detail="Description cannot be empty")
+    
+    try:
+        result = save_feature_suggestion(
+            auth_user_id=auth_id,
+            suggestion_type=suggestion.suggestion_type,
+            title=suggestion.title,
+            description=suggestion.description
+        )
+        return {
+            "status": "success",
+            "message": f"Thank you! Your {suggestion.suggestion_type} report has been saved.",
+            "id": result.get("id") if isinstance(result, dict) else None
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error saving suggestion: {str(e)}")
