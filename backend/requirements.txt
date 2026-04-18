@@ -8,3 +8,4 @@ google-genai
 Pillow
 pytest
 openai
+vercel-playwright
