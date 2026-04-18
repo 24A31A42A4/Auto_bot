@@ -9,6 +9,14 @@ from dotenv import load_dotenv, find_dotenv
 import os
 import sys
 
+# Vercel Playwright Support
+if os.getenv("VERCEL"):
+    try:
+        import vercel_playwright
+        vercel_playwright.install()
+    except ImportError:
+        pass
+
 load_dotenv(find_dotenv())
 
 from fastapi.middleware.cors import CORSMiddleware
