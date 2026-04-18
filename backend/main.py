@@ -24,7 +24,11 @@ from src.webhook_handler import process_message
 from src.database import get_user, save_user, update_user, get_user_by_auth_id, increment_forms_filled, save_form_history, get_form_history, save_feature_suggestion
 from src.form_bot import fill_form
 
-app = FastAPI(title="AutoForm Bot", description="WhatsApp bot that auto-fills Google Forms using AI")
+app = FastAPI(
+    title="AutoForm Bot", 
+    description="WhatsApp bot that auto-fills Google Forms using AI",
+    root_path="/_/backend"
+)
 
 # CORS middleware for React frontend
 FRONTEND_URL = os.getenv("FRONTEND_URL", "http://localhost:5173")
