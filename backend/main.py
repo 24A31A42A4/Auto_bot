@@ -26,8 +26,7 @@ from src.form_bot import fill_form
 
 app = FastAPI(
     title="AutoForm Bot", 
-    description="WhatsApp bot that auto-fills Google Forms using AI",
-    root_path="/_/backend"
+    description="WhatsApp bot that auto-fills Google Forms using AI"
 )
 
 # CORS middleware for React frontend
