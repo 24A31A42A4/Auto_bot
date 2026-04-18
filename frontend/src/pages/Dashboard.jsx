@@ -115,7 +115,7 @@ const Dashboard = () => {
         } catch (err) {
           console.error("Polling error:", err);
         }
-      }, 7000);
+      }, 2000); // Poll every 2 seconds while form is being filled
     }
     return () => clearInterval(interval);
   }, [loading, user]);

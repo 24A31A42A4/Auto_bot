@@ -109,9 +109,13 @@ async def _process_form_pages(page: Page, user_profile: dict, log_status: callab
             email_val = get_profile_value(user_profile, "email")
             if email_val:
                 log_status(f"Filling email field: {email_val}")
-                await top_email.click()
-                await top_email.fill(email_val)
-                await top_email.press("Tab")
+                try:
+                    await top_email.scroll_into_view_if_needed()
+                    await top_email.click(force=True, timeout=3000)
+                    await top_email.fill(email_val)
+                    await top_email.press("Tab")
+                except Exception as e:
+                    log_status(f"⚠️ Error filling email field: {e}")
 
         # Scrape ONLY VISIBLE questions on current page
         questions = await _scrape_questions(page)
@@ -507,11 +511,23 @@ async def _parse_question_block(page: Page, block: ElementHandle) -> dict | None
                 if opt_text and opt_text.lower() != "choose":
                     options.append(opt_text)
 
-    # Check for paragraph (long answer)
+    # Check for paragraph (long answer) - BEFORE assuming short_text
     if not options:
         textarea = await block.query_selector('textarea')
         if textarea:
             q_type = "paragraph"
+
+    # If no specific type found, default to short_text (has input field)
+    if q_type == "short_text" and not options:
+        # Verify there's actually an input field (short_text)
+        text_input = await block.query_selector(
+            'input[type="text"], input[type="email"], input[type="number"], '
+            'input[type="url"], input[type="tel"], input[type="date"], '
+            'input:not([type]), input, .whsOnd, [contenteditable="true"]'
+        )
+        if not text_input:
+            # If no input found and no options, might be a hidden field or malformed question
+            q_type = "unknown"
 
     # CRITICAL: Detect if options are just single-letter labels (A, B, C, D, E)
     # If so, try to extract the FULL option values from the question text.
@@ -568,18 +584,29 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
                 'input:not([type]), .whsOnd'
             )
             if input_el:
-                await input_el.scroll_into_view_if_needed()
-                await input_el.click()
-                await page.wait_for_timeout(100)
-                await input_el.focus()
-                await input_el.fill(answer)
-                await input_el.press("Tab")
+                try:
+                    await input_el.scroll_into_view_if_needed()
+                    await page.wait_for_timeout(100)
+                    await input_el.click(force=True, timeout=3000)
+                    await page.wait_for_timeout(100)
+                    await input_el.focus()
+                    await input_el.fill(answer)
+                    await input_el.press("Tab")
+                except Exception as e:
+                    print(f"[form_bot] ⚠️ Error filling input field: {str(e)}")
             else:
                 # Fallback: find ANY input in the block
                 fallback = await block.query_selector("input")
                 if fallback:
-                    await fallback.fill(answer)
-                    await fallback.press("Tab")
+                    try:
+                        await fallback.scroll_into_view_if_needed()
+                        await fallback.click(force=True, timeout=3000)
+                        await page.wait_for_timeout(100)
+                        await fallback.focus()
+                        await fallback.fill(answer)
+                        await fallback.press("Tab")
+                    except Exception as e:
+                        print(f"[form_bot] ⚠️ Error with fallback input: {str(e)}")
                 else:
                     # Fallback: contenteditable divs
                     editable = await block.query_selector('[contenteditable="true"], [contenteditable="plaintext-only"]')
@@ -588,17 +615,36 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
                         await page.wait_for_timeout(100)
                         await page.keyboard.type(answer)
                     else:
-                        print(f"[form_bot] ⚠️ Could not find input for '{question['question_text'][:30]}...'")
+                        # Fallback: try clicking anywhere in the block and typing
+                        try:
+                            await block.click(force=True)
+                            await page.wait_for_timeout(150)
+                            await page.keyboard.type(answer)
+                            print(f"[form_bot] ℹ️ Filled '{question['question_text'][:30]}...' by clicking block and typing")
+                        except Exception as e:
+                            print(f"[form_bot] ⚠️ Could not find input for '{question['question_text'][:30]}...' - {str(e)}")
 
         elif q_type == "paragraph":
             textarea = await block.query_selector("textarea, .KH7Ywe")
             if textarea:
-                await textarea.scroll_into_view_if_needed()
-                await textarea.click()
-                await page.wait_for_timeout(100)
-                await textarea.focus()
-                await textarea.fill(answer)
-                await textarea.press("Tab")
+                try:
+                    await textarea.scroll_into_view_if_needed()
+                    await textarea.click(force=True, timeout=3000)
+                    await page.wait_for_timeout(100)
+                    await textarea.focus()
+                    await textarea.fill(answer)
+                    await textarea.press("Tab")
+                except Exception as e:
+                    print(f"[form_bot] ⚠️ Error filling textarea: {str(e)}")
+            else:
+                # Fallback: try contenteditable div or click and type
+                editable = await block.query_selector('[contenteditable="true"], [contenteditable="plaintext-only"]')
+                if editable:
+                    await editable.click()
+                    await page.wait_for_timeout(100)
+                    await page.keyboard.type(answer)
+                else:
+                    print(f"[form_bot] ⚠️ Could not find textarea for '{question['question_text'][:30]}...'")
 
         elif q_type == "radio":
             option_map = question.get("option_map", {})
@@ -614,12 +660,30 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
         elif q_type == "dropdown":
             dropdown = await block.query_selector('div[role="listbox"]')
             if dropdown:
-                await dropdown.click()
-                await page.wait_for_timeout(500)
-                option = await page.query_selector(f'div[role="option"]:has-text("{answer}")')
-                if option:
-                    await option.click()
-                    await page.wait_for_timeout(300)
+                try:
+                    await dropdown.scroll_into_view_if_needed()
+                    await page.wait_for_timeout(200)
+                    await dropdown.click(force=True)
+                    await page.wait_for_timeout(500)
+                    option = await page.query_selector(f'div[role="option"]:has-text("{answer}")')
+                    if option:
+                        await option.scroll_into_view_if_needed()
+                        await option.click(force=True)
+                        await page.wait_for_timeout(300)
+                    else:
+                        print(f"[form_bot] ⚠️ Could not find dropdown option for '{answer}'")
+                except Exception as e:
+                    print(f"[form_bot] ⚠️ Error clicking dropdown: {str(e)}")
+
+        elif q_type == "unknown":
+            # Fallback for unknown question types - try clicking and typing
+            try:
+                await block.click()
+                await page.wait_for_timeout(150)
+                await page.keyboard.type(answer)
+                print(f"[form_bot] ℹ️ Filled unknown type '{question['question_text'][:30]}...' by clicking and typing")
+            except Exception as e:
+                print(f"[form_bot] ⚠️ Could not fill unknown type '{question['question_text'][:30]}...' - {str(e)}")
 
         await page.wait_for_timeout(200)  # Small delay between fields
 
@@ -635,6 +699,33 @@ async def _select_option(block: ElementHandle, answer: str, role: str, option_ma
     import re as _re
     answer_lower = answer.lower().strip()
     answer_norm = _re.sub(r'[^\w\s]', '', answer_lower).strip()
+
+    async def safe_click(element, description=""):
+        """Safely click an element with improved stability and retry options."""
+        try:
+            # 1. Scroll and ensure it's in the center
+            await element.scroll_into_view_if_needed()
+            
+            # 2. Settle Delay: Increased to 300ms to allow animations to fully finish
+            await asyncio.sleep(0.3)
+            
+            # 3. Wait for stability (not just visibility)
+            await element.wait_for_element_state("stable", timeout=2000)
+            
+            try:
+                # 4. Attempt normal click with a shorter timeout (1.5s) to fail fast to fallback
+                await element.click(timeout=1500)
+            except:
+                # 5. Immediate Force Click if normal fails
+                # Reduced logging to avoid "error" confusion
+                await element.click(force=True, timeout=1000)
+            
+            # 6. Post-click wait: Give the form 200ms to register the selection
+            await asyncio.sleep(0.2)
+            return True
+        except Exception as e:
+            print(f"[form_bot] ⚠️ Click interaction failed for {description}: {str(e)}")
+            return False
 
     # If we have an option_map (letter -> value), try to find the matching letter
     # AI might return "A. Rs. 3365.75" or "Rs. 3365.75" or just "A"
@@ -667,9 +758,8 @@ async def _select_option(block: ElementHandle, answer: str, role: str, option_ma
                 opt_inner = (await opt.inner_text()).strip()
                 opt_id = (data_val or aria_label or opt_inner or "").strip().upper()
                 if opt_id == target_letter:
-                    await opt.scroll_into_view_if_needed()
-                    await opt.click()
-                    return
+                    if await safe_click(opt, f"option letter {target_letter}"):
+                        return
             # If letter matching failed, fall through to normal matching below
 
     # Try to find the option by role
@@ -679,9 +769,8 @@ async def _select_option(block: ElementHandle, answer: str, role: str, option_ma
     for opt in options:
         opt_text = await _get_option_text(opt)
         if opt_text and opt_text.lower() == answer_lower:
-            await opt.scroll_into_view_if_needed()
-            await opt.click()
-            return
+            if await safe_click(opt, f"option '{opt_text}'"):
+                return
 
     # Second pass: normalized match (ignore punctuation)
     for opt in options:
@@ -689,9 +778,8 @@ async def _select_option(block: ElementHandle, answer: str, role: str, option_ma
         if opt_text:
             opt_norm = _re.sub(r'[^\w\s]', '', opt_text.lower()).strip()
             if opt_norm == answer_norm:
-                await opt.scroll_into_view_if_needed()
-                await opt.click()
-                return
+                if await safe_click(opt, f"option (normalized) '{opt_text}'"):
+                    return
 
     # Third pass: substring containment
     for opt in options:
@@ -699,9 +787,8 @@ async def _select_option(block: ElementHandle, answer: str, role: str, option_ma
         if opt_text:
             opt_lower = opt_text.lower().strip()
             if answer_lower in opt_lower or opt_lower in answer_lower:
-                await opt.scroll_into_view_if_needed()
-                await opt.click()
-                return
+                if await safe_click(opt, f"option (substring) '{opt_text}'"):
+                    return
 
     # Fallback: match labels ONLY inside option containers (avoid question text, "Required" etc.)
     option_containers = await block.query_selector_all(f'div[role="{role}"], label[data-value]')
@@ -710,15 +797,17 @@ async def _select_option(block: ElementHandle, answer: str, role: str, option_ma
         for label in labels:
             label_text = (await label.inner_text()).strip().lower()
             if label_text and (label_text == answer_lower or answer_lower in label_text):
-                await container.scroll_into_view_if_needed()
-                await container.click()
-                return
+                if await safe_click(container, f"label '{label_text}'"):
+                    return
 
     # Last resort: click first option (better than leaving a required field blank)
     if options:
         print(f"[form_bot] Could not match option '{answer}', clicking first available")
-        await options[0].scroll_into_view_if_needed()
-        await options[0].click()
+        try:
+            await options[0].scroll_into_view_if_needed()
+            await options[0].click(force=True)
+        except Exception as e:
+            print(f"[form_bot] ⚠️ Last resort click failed: {str(e)}")
 
 
 async def _get_option_text(opt: ElementHandle) -> str:

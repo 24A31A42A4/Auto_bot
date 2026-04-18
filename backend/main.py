@@ -263,6 +263,8 @@ async def api_fill_form(request: Request, form_req: FormRequest, background_task
     def run_fill_in_thread():
         """Run Playwright in a separate thread with its own event loop (Windows fix)."""
         import asyncio as _asyncio
+        import io as _io
+        import sys as _sys
         
         # Windows: ProactorEventLoop is the ONLY loop type that supports subprocesses
         if sys.platform == "win32":
@@ -272,9 +274,37 @@ async def api_fill_form(request: Request, form_req: FormRequest, background_task
         _asyncio.set_event_loop(loop)
         
         try:
-            full_result = loop.run_until_complete(
-                fill_form(form_req.url, user_profile, status_callback=status_callback)
-            )
+            # Create a custom stream that duplicates to both stdout and status_callback
+            class DuplicateStream:
+                def __init__(self, original_stream, callback):
+                    self.original = original_stream
+                    self.callback = callback
+                    self.buffer = ""
+                
+                def write(self, msg):
+                    self.original.write(msg)  # Print to terminal
+                    if msg and msg.strip():  # Only send non-empty lines to callback
+                        self.buffer += msg
+                        if '\n' in msg:
+                            for line in self.buffer.split('\n'):
+                                if line.strip():
+                                    self.callback(line)
+                            self.buffer = ""
+                
+                def flush(self):
+                    self.original.flush()
+            
+            # Redirect stdout to capture and duplicate
+            original_stdout = _sys.stdout
+            _sys.stdout = DuplicateStream(original_stdout, status_callback)
+            
+            try:
+                full_result = loop.run_until_complete(
+                    fill_form(form_req.url, user_profile, status_callback=status_callback)
+                )
+            finally:
+                _sys.stdout = original_stdout
+            
             score = full_result["score"]
             title = full_result["title"]
             score_url = full_result.get("score_url")
