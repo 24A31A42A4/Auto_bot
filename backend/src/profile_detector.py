@@ -12,7 +12,7 @@ import re
 # Keywords that indicate a question is a quiz/academic question, NOT a personal field.
 # If any of these appear in the question, skip personal field detection.
 QUIZ_INDICATORS = [
-    "which", "what is the", "what are the", "what was", "what were",
+    "what are the", "what was", "what were",
     "explain", "define", "describe", "how many", "how much", "how does",
     "how is", "how are", "how do", "why is", "why are", "why does",
     "calculate", "find the", "solve", "compute", "evaluate",
@@ -27,6 +27,7 @@ QUIZ_INDICATORS = [
 KEYWORD_MAP = {
     "name": {
         "keywords": [
+            r"\bname\b",  # Matches standalone "Name" or "Name *"
             r"\byour\s+name\b", r"\bfull\s+name\b", r"\bstudent\s+name\b",
             r"\bname\s+of\s+the\s+student\b", r"\bparticipant\s+name\b",
             r"\bcandidate\s+name\b", r"\benter\s+name\b",
@@ -37,7 +38,7 @@ KEYWORD_MAP = {
         "keywords": [
             r"\broll\s*(?:no|number|num)\b", r"\broll\b",
             r"\bregister\s*(?:no|number)\b", r"\bregistration\s*(?:no|number)\b",
-            r"\bregd\b", r"\breg\.?\s*no\b",
+            r"\bregd\b", r"\breg(?:\.|\s)*no\b", r"\breg\.\s+no\b", r"\brno\b",
             r"\bid\s*number\b", r"\bhall\s*ticket\b", r"\bht\s*(?:no|number)\b",
         ],
         "profile_field": "roll_number",
