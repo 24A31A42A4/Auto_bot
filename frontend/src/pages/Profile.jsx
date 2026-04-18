@@ -20,7 +20,7 @@ import {
 import { Link } from "react-router-dom";
 import { LoadingSpinner, LoadingCard } from "../components/LoadingSpinner";
 
-const API_URL = import.meta.env.VITE_API_URL || "/api";
+const API_URL = import.meta.env.VITE_API_URL || "/_/backend";
 
 const Profile = () => {
   const { user } = useAuth();
