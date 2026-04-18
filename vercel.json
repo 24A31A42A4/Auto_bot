@@ -7,7 +7,7 @@
     },
     {
       "source": "/(.*)",
-      "destination": "frontend/dist/$1"
+      "destination": "/$1"
     }
   ],
   "builds": [
