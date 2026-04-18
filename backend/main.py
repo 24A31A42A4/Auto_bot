@@ -12,7 +12,7 @@ import sys
 # Vercel Playwright Support
 if os.getenv("VERCEL"):
     try:
-        import vercel_playwright
+        import playwright
         vercel_playwright.install()
     except ImportError:
         pass
@@ -27,7 +27,7 @@ from src.form_bot import fill_form
 app = FastAPI(
     title="AutoForm Bot", 
     description="WhatsApp bot that auto-fills Google Forms using AI",
-    root_path="/_/backend"
+    root_path="/api"
 )
 
 # CORS middleware for React frontend
