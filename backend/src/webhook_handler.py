@@ -14,19 +14,22 @@ from src.form_bot import fill_form
 def is_google_form_link(text: str) -> str | None:
     """
     Check if the message contains a Google Form link.
-    Returns the URL if found, None otherwise.
+    Returns the normalized URL if found, None otherwise.
     """
     # Match forms.gle short links and docs.google.com/forms links
     patterns = [
-        r'(https?://forms\.gle/\S+)',
-        r'(https?://docs\.google\.com/forms/\S+)',
-        r'(https?://tinyurl\.com/\S+)',
-        r'(https?://bit\.ly/\S+)',
+        r'((?:https?://)?forms\.gle/\S+)',
+        r'((?:https?://)?docs\.google\.com/forms/\S+)',
+        r'((?:https?://)?tinyurl\.com/\S+)',
+        r'((?:https?://)?bit\.ly/\S+)',
     ]
     for pattern in patterns:
         match = re.search(pattern, text)
         if match:
-            return match.group(1)
+            url = match.group(1).strip()
+            if not url.startswith(("http://", "https://")):
+                url = f"https://{url}"
+            return url
     return None
 
 

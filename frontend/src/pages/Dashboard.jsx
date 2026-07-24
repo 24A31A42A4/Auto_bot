@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useCallback } from "react";
 import {
   Bot,
   Loader2,
@@ -35,11 +35,12 @@ const Dashboard = () => {
   const isAtBottom = useRef(true);
 
   // Fetch History
-  const fetchHistory = async () => {
+  const fetchHistory = useCallback(async () => {
     if (!user) return;
     try {
       const res = await fetch(`${API_URL}/history/${user.id}`);
-      if (!res.ok) return;
+      const contentType = res.headers.get("content-type");
+      if (!res.ok || !contentType || !contentType.includes("application/json")) return;
       const data = await res.json();
       setHistory(data);
     } catch (err) {
@@ -47,26 +48,26 @@ const Dashboard = () => {
     } finally {
       setHistoryLoading(false);
     }
-  };
+  }, [user]);
 
   // Fetch Stats
-  const fetchStats = async () => {
+  const fetchStats = useCallback(async () => {
     if (!user) return;
     try {
       const res = await fetch(`${API_URL}/stats/${user.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setStats(data);
-      }
+      const contentType = res.headers.get("content-type");
+      if (!res.ok || !contentType || !contentType.includes("application/json")) return;
+      const data = await res.json();
+      setStats(data);
     } catch (err) {
       console.error("Stats fetch error:", err);
     }
-  };
+  }, [user]);
 
   useEffect(() => {
     fetchHistory();
     fetchStats();
-  }, [user]);
+  }, [fetchHistory, fetchStats]);
 
   useEffect(() => {
     const container = logContainerRef.current;
@@ -94,16 +95,23 @@ const Dashboard = () => {
       interval = setInterval(async () => {
         try {
           const res = await fetch(`${API_URL}/status/${user.id}`);
-          if (res.ok) {
+          const contentType = res.headers.get("content-type");
+          if (res.ok && contentType && contentType.includes("application/json")) {
             const data = await res.json();
-            const newLogs = (data.logs || []).map((logText, i) => {
-              if (i < logs.length && logs[i]?.text === logText) return logs[i];
-              return {
-                text: logText,
-                time: new Date().toLocaleTimeString([], { hour12: false }),
-              };
+            
+            setLogs((prevLogs) => {
+              const fetchedLogs = data.logs || [];
+              return fetchedLogs.map((logText, i) => {
+                if (i < prevLogs.length && prevLogs[i]?.text === logText) {
+                  return prevLogs[i];
+                }
+                return {
+                  text: logText,
+                  time: new Date().toLocaleTimeString([], { hour12: false }),
+                };
+              });
             });
-            setLogs(newLogs);
+
             if (data.result) {
               setResult(data.result);
               setLoading(false);
@@ -115,10 +123,12 @@ const Dashboard = () => {
         } catch (err) {
           console.error("Polling error:", err);
         }
-      }, 2000); // Poll every 2 seconds while form is being filled
+      }, 3500); // Optimized polling interval (3.5s) to reduce terminal request noise
     }
-    return () => clearInterval(interval);
-  }, [loading, user]);
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [loading, user, fetchHistory, fetchStats]);
 
   const handleFillForm = async (e) => {
     e.preventDefault();
@@ -192,19 +202,21 @@ const Dashboard = () => {
     }
   };
 
-  const parseNumericScore = (score) => {
-    const parsed = parseScore(score);
-    if (typeof parsed !== "string") return Number(parsed) || null;
-
-    if (parsed.includes("/")) {
-      const [current, total] = parsed.split("/").map((v) => Number(v?.trim()));
-      if (Number.isFinite(current) && Number.isFinite(total) && total > 0) {
-        return Math.round((current / total) * 100);
-      }
+  const parseScoreDetails = (resultObj) => {
+    if (!resultObj) return { scoreStr: "", current: 0, total: 0, percentage: 0, title: "" };
+    const rawScore = typeof resultObj === "object" ? resultObj.score : resultObj;
+    const title = typeof resultObj === "object" && resultObj.title ? resultObj.title.replace(/\s+/g, ' ').trim() : "";
+    if (!rawScore || typeof rawScore !== "string") {
+      return { scoreStr: String(rawScore || "Submitted"), current: 0, total: 0, percentage: 100, title };
     }
-
-    const numeric = Number(parsed);
-    return Number.isFinite(numeric) ? numeric : null;
+    const match = rawScore.match(/(\d+)\s*\/\s*(\d+)/);
+    if (match) {
+      const current = parseInt(match[1], 10);
+      const total = parseInt(match[2], 10);
+      const percentage = total > 0 ? Math.round((current / total) * 100) : 0;
+      return { scoreStr: `${current} / ${total}`, current, total, percentage, title };
+    }
+    return { scoreStr: rawScore, current: 0, total: 0, percentage: 100, title };
   };
 
   return (
@@ -425,46 +437,66 @@ const Dashboard = () => {
                         </div>
                       </div>
                     )}
-                    {result && (
-                      <div className="mt-6 p-4 bg-primary/5 border border-primary/20 rounded-xl text-center relative overflow-hidden">
-                        <div className="absolute inset-0 bg-gradient-to-b from-primary/5 to-transparent pointer-events-none" />
-                        <div className="relative z-10">
-                          <div className="text-[7px] font-black text-gray-500 mb-1 uppercase tracking-[0.3em]">
-                            {isError ? "Status" : "Result"}
-                          </div>
-                          <div
-                            className={`text-xl md:text-2xl font-black tracking-tighter mb-2 ${isError ? "text-amber-500" : "primary-gradient-text"}`}
-                          >
-                            {displayValue}
-                          </div>
-                          <div
-                            className={`text-[7px] font-black uppercase tracking-widest flex items-center justify-center gap-1 ${isError ? "text-amber-500/60" : "text-primary"}`}
-                          >
-                            {isError ? (
-                              <AlertCircle size={9} />
-                            ) : (
-                              <ShieldCheck size={9} />
-                            )}{" "}
-                            {isError
-                              ? "Check form fields"
-                              : "Submitted Successfully"}
-                          </div>
+                    {result && (() => {
+                      const details = parseScoreDetails(result);
+                      const isPass = details.percentage >= 50;
+                      return (
+                        <div className="mt-6 p-5 bg-gradient-to-br from-emerald-500/10 via-primary/5 to-transparent border border-emerald-500/30 rounded-2xl text-center relative overflow-hidden shadow-2xl animate-in fade-in zoom-in-95 duration-300">
+                          <div className="absolute -top-12 -right-12 w-28 h-28 bg-emerald-500/20 rounded-full blur-2xl pointer-events-none" />
+                          
+                          <div className="relative z-10 space-y-3">
+                            {details.title && (
+                              <div className="text-[10px] font-bold text-gray-300 line-clamp-1 border-b border-white/5 pb-2 tracking-wide">
+                                {details.title}
+                              </div>
+                            )}
 
-                          {!isError && result?.score_url && (
-                            <div className="mt-3 flex justify-center">
-                              <a
-                                href={result.score_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="inline-flex items-center gap-2 px-3 py-1.5 bg-primary text-black rounded-lg text-[8px] font-black uppercase tracking-[0.15em] hover:scale-105 active:scale-95 transition-all shadow-lg"
-                              >
-                                View Score <ArrowRight size={10} />
-                              </a>
+                            <div className="flex items-center justify-between px-1">
+                              <div className="flex items-center gap-1.5 text-[9px] font-black uppercase tracking-widest text-emerald-400">
+                                <ShieldCheck size={14} className="text-emerald-400" />
+                                {isError ? "Form Notification" : "Form Submitted"}
+                              </div>
+                              {details.total > 0 && (
+                                <div className="flex items-center gap-1 text-xs font-black text-emerald-400 bg-emerald-500/10 px-2.5 py-1 rounded-full border border-emerald-500/20">
+                                  <Trophy size={12} /> {details.percentage}%
+                                </div>
+                              )}
                             </div>
-                          )}
+
+                            <div className="py-2">
+                              <div className="text-3xl md:text-4xl font-black tracking-tight text-white drop-shadow-md">
+                                {details.scoreStr}
+                              </div>
+                              <div className="text-[9px] font-semibold text-gray-400 uppercase tracking-widest mt-1">
+                                {isError ? "Status Message" : "Total Points Scored"}
+                              </div>
+                            </div>
+
+                            {details.total > 0 && (
+                              <div className="w-full bg-white/5 rounded-full h-2.5 p-0.5 border border-white/10 overflow-hidden">
+                                <div
+                                  className="h-full bg-gradient-to-r from-emerald-500 via-teal-400 to-primary rounded-full transition-all duration-1000 shadow-lg"
+                                  style={{ width: `${Math.min(100, Math.max(5, details.percentage))}%` }}
+                                />
+                              </div>
+                            )}
+
+                            {!isError && result?.score_url && (
+                              <div className="pt-2">
+                                <a
+                                  href={result.score_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-gradient-to-r from-emerald-400 via-teal-400 to-primary text-black font-black rounded-xl text-[10px] uppercase tracking-widest hover:brightness-110 active:scale-98 transition-all shadow-xl shadow-emerald-500/20"
+                                >
+                                  View Full Scorecard <ArrowRight size={12} />
+                                </a>
+                              </div>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 )}
               </div>

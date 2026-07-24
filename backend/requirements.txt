@@ -6,6 +6,7 @@ supabase
 playwright
 google-genai
 Pillow
-pytest
 openai
-playwright
+pytest
+pydantic
+watchfiles

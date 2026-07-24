@@ -13,6 +13,7 @@ Based on the original working logic, with targeted improvements:
 """
 
 import asyncio
+import re
 from playwright.async_api import async_playwright, Page, ElementHandle
 from src.profile_detector import detect_personal_field, get_profile_value
 from src.ai_helper import answer_questions, answer_with_image
@@ -34,6 +35,10 @@ async def fill_form(url: str, user_profile: dict, status_callback: callable = No
         print(f"[form_bot] {msg}")
         if status_callback:
             status_callback(msg)
+
+    url = url.strip()
+    if url and not url.startswith(("http://", "https://")):
+        url = f"https://{url}"
 
     log_status(f"Starting form-fill for {url}")
     async with async_playwright() as p:
@@ -71,18 +76,11 @@ async def fill_form(url: str, user_profile: dict, status_callback: callable = No
 
 
 async def _scroll_to_bottom(page: Page) -> None:
-    """Scroll down the page gradually to ensure all questions are loaded & visible."""
-    previous_height = 0
-    for _ in range(20):  # Max 20 scroll steps
-        current_height = await page.evaluate("document.body.scrollHeight")
-        if current_height == previous_height:
-            break
-        await page.evaluate("window.scrollBy(0, 400)")
-        await page.wait_for_timeout(300)
-        previous_height = current_height
-    # Scroll back to top so we fill fields from the beginning
+    """Instantly scroll to bottom and top to ensure DOM is fully initialized."""
+    await page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+    await page.wait_for_timeout(100)
     await page.evaluate("window.scrollTo(0, 0)")
-    await page.wait_for_timeout(500)
+    await page.wait_for_timeout(50)
 
 
 async def _process_form_pages(page: Page, user_profile: dict, log_status: callable, form_title: str) -> str:
@@ -172,7 +170,7 @@ async def _process_form_pages(page: Page, user_profile: dict, log_status: callab
                     for i, inp in enumerate(ai_input):
                         print(f"[form_bot] AI Input Q{text_indices[i]+1}: '{inp['question'][:60]}' | Options: {inp['options'][:4]}")
 
-                    text_answers = answer_questions(ai_input, user_profile, form_title=form_title)
+                    text_answers = await asyncio.to_thread(answer_questions, ai_input, user_profile, form_title)
 
                     for idx, ans in zip(text_indices, text_answers):
                         ai_answers[idx] = ans
@@ -529,35 +527,22 @@ async def _parse_question_block(page: Page, block: ElementHandle) -> dict | None
             # If no input found and no options, might be a hidden field or malformed question
             q_type = "unknown"
 
-    # CRITICAL: Detect if options are just single-letter labels (A, B, C, D, E)
-    # If so, try to extract the FULL option values from the question text.
-    # Many Google Forms embed options like "A. Rs. 3266.75  B. Rs. 3165.75" in the question itself.
-    if options and all(len(o.strip()) <= 2 for o in options):
-        # Try to parse "A. value", "A) value", "A: value" patterns from question text
-        embedded_options = re.findall(
-            r'(?:^|\n|\s)([A-Ea-e])[.):\s]+\s*(.+?)(?=\s*[A-Ea-e][.):\s]|\s*\*|\s*$)',
-            question_text, re.MULTILINE
-        )
-        if embedded_options and len(embedded_options) >= len(options):
-            option_map = {}
-            full_options = []
-            for letter, value in embedded_options:
-                letter_upper = letter.upper().strip()
-                value_clean = value.strip().rstrip('.')
-                option_map[letter_upper] = value_clean
-                full_options.append(f"{letter_upper}. {value_clean}")
-            
-            print(f"[form_bot] Extracted option map from question text: {option_map}")
-            
-            # Replace bare letter options with full "A. value" options for AI
-            options = full_options
-            
-            # Clean the question text: remove the embedded options so AI sees only the question
-            for letter, value in embedded_options:
-                pattern = rf'\s*{re.escape(letter)}[.):\s]+\s*{re.escape(value.strip())}'
-                question_text = re.sub(pattern, '', question_text).strip()
+    # 1. Are DOM extracted options complete?
+    if _are_options_complete(options):
+        # YES -> Use DOM options only! Do NOT run fallback parser.
+        options = _clean_and_validate_options(options, question_text)
+        options = _deduplicate_options(options)
+    else:
+        # NO -> Run fallback parser on full block text to recover missing options
+        full_block_text = (await block.inner_text()).strip()
+        fallback_options, option_map = _extract_embedded_options(full_block_text)
+        if fallback_options:
+            options = fallback_options
+        else:
+            options = _clean_and_validate_options(options, question_text)
+        options = _deduplicate_options(options)
 
-    return {
+    q_data = {
         "question_text": question_text,
         "type": q_type,
         "options": options,
@@ -565,6 +550,11 @@ async def _parse_question_block(page: Page, block: ElementHandle) -> dict | None
         "element": block,
         "has_image": has_image,
     }
+
+    # 2. Validate extracted data before sending to AI
+    _validate_question_for_ai(q_data)
+
+    return q_data
 
 
 async def _fill_field(page: Page, question: dict, answer: str) -> None:
@@ -575,7 +565,7 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
     try:
         # Scroll the question into view before filling
         await block.scroll_into_view_if_needed()
-        await page.wait_for_timeout(200)
+        await page.wait_for_timeout(50)
 
         if q_type == "short_text":
             input_el = await block.query_selector(
@@ -694,153 +684,296 @@ async def _fill_field(page: Page, question: dict, answer: str) -> None:
 async def _select_option(block: ElementHandle, answer: str, role: str, option_map: dict = None) -> None:
     """
     Select a radio or checkbox option by matching answer text.
-    If option_map is provided, maps AI answer values back to letter labels.
+    Handles letter prefixes (e.g. 'A. Sister' -> 'Sister' or letter 'A') and attribute matching.
     """
     import re as _re
-    answer_lower = answer.lower().strip()
-    answer_norm = _re.sub(r'[^\w\s]', '', answer_lower).strip()
+    raw_answer = str(answer).strip()
+    if not raw_answer:
+        return
 
     async def safe_click(element, description=""):
-        """Safely click an element with improved stability and retry options."""
+        """Safely click an element with fast response timing."""
         try:
-            # 1. Scroll and ensure it's in the center
             await element.scroll_into_view_if_needed()
-            
-            # 2. Settle Delay: Increased to 300ms to allow animations to fully finish
-            await asyncio.sleep(0.3)
-            
-            # 3. Wait for stability (not just visibility)
-            await element.wait_for_element_state("stable", timeout=2000)
-            
+            await asyncio.sleep(0.02)
             try:
-                # 4. Attempt normal click with a shorter timeout (1.5s) to fail fast to fallback
-                await element.click(timeout=1500)
+                await element.click(timeout=800)
             except:
-                # 5. Immediate Force Click if normal fails
-                # Reduced logging to avoid "error" confusion
-                await element.click(force=True, timeout=1000)
-            
-            # 6. Post-click wait: Give the form 200ms to register the selection
-            await asyncio.sleep(0.2)
+                await element.click(force=True, timeout=800)
+            await asyncio.sleep(0.02)
             return True
         except Exception as e:
-            print(f"[form_bot] ⚠️ Click interaction failed for {description}: {str(e)}")
+            print(f"[form_bot] Warning: Click failed for {description}: {str(e)}")
             return False
 
-    # If we have an option_map (letter -> value), try to find the matching letter
-    # AI might return "A. Rs. 3365.75" or "Rs. 3365.75" or just "A"
-    if option_map:
-        target_letter = None
-        
-        # Check if AI returned something like "A. Rs. 3365.75" — extract the letter
-        letter_match = _re.match(r'^([A-Ea-e])[.)\s]', answer.strip())
-        if letter_match:
-            target_letter = letter_match.group(1).upper()
-        else:
-            # Check if the answer matches any VALUE in the option_map
-            for letter, value in option_map.items():
-                value_lower = value.lower().strip()
-                value_norm = _re.sub(r'[^\w\s]', '', value_lower).strip()
-                if (answer_lower == value_lower or
-                    answer_norm == value_norm or
-                    answer_lower in value_lower or
-                    value_lower in answer_lower):
-                    target_letter = letter
-                    break
-        
-        if target_letter:
-            print(f"[form_bot] Mapped answer '{answer}' to letter '{target_letter}' via option_map")
-            # Click the radio/checkbox with this letter label
-            options = await block.query_selector_all(f'div[role="{role}"]')
-            for opt in options:
-                data_val = await opt.get_attribute("data-value")
-                aria_label = await opt.get_attribute("aria-label")
-                opt_inner = (await opt.inner_text()).strip()
-                opt_id = (data_val or aria_label or opt_inner or "").strip().upper()
-                if opt_id == target_letter:
-                    if await safe_click(opt, f"option letter {target_letter}"):
-                        return
-            # If letter matching failed, fall through to normal matching below
+    # Extract target letter if present (e.g. "A. Sister" -> letter 'A')
+    letter_match = _re.match(r'^(?:\()?([A-Ea-e1-5])[\.\):\s\-]\s*(.*)$', raw_answer)
+    target_letter = letter_match.group(1).upper() if letter_match else None
+    clean_answer = letter_match.group(2).strip() if (letter_match and letter_match.group(2).strip()) else raw_answer
 
-    # Try to find the option by role
-    options = await block.query_selector_all(f'div[role="{role}"]')
+    # If option_map exists and we have target_letter, get mapped value
+    mapped_val = option_map.get(target_letter) if (option_map and target_letter) else None
 
-    # First pass: exact match
+    # Build list of normalized search target strings
+    search_targets = set()
+    for item in [raw_answer, clean_answer, mapped_val]:
+        if item:
+            item_str = str(item).strip().lower()
+            if item_str:
+                search_targets.add(item_str)
+                search_targets.add(_re.sub(r'[^\w\s]', '', item_str).strip())
+
+    options = await block.query_selector_all(f'div[role="{role}"], label[data-value], div[data-value]')
+
+    # 1. Attribute Match Pass (data-value, aria-label)
     for opt in options:
-        opt_text = await _get_option_text(opt)
-        if opt_text and opt_text.lower() == answer_lower:
-            if await safe_click(opt, f"option '{opt_text}'"):
+        data_val = (await opt.get_attribute("data-value") or "").strip()
+        aria_lbl = (await opt.get_attribute("aria-label") or "").strip()
+        
+        # Letter match on data-value or aria-label
+        if target_letter and (data_val.upper() == target_letter or aria_lbl.upper() == target_letter):
+            if await safe_click(opt, f"attribute letter '{target_letter}'"):
+                print(f"[form_bot] Selected option via attribute letter '{target_letter}'")
                 return
 
-    # Second pass: normalized match (ignore punctuation)
+        # Target value match on data-value or aria-label
+        d_lower = data_val.lower()
+        a_lower = aria_lbl.lower()
+        for target in search_targets:
+            if target and (target == d_lower or target == a_lower or target in d_lower or target in a_lower):
+                if await safe_click(opt, f"attribute value '{target}'"):
+                    print(f"[form_bot] Selected option via attribute match '{target}'")
+                    return
+
+    # 2. Text Match Pass (_get_option_text & inner_text)
     for opt in options:
-        opt_text = await _get_option_text(opt)
-        if opt_text:
-            opt_norm = _re.sub(r'[^\w\s]', '', opt_text.lower()).strip()
-            if opt_norm == answer_norm:
-                if await safe_click(opt, f"option (normalized) '{opt_text}'"):
+        opt_text = (await _get_option_text(opt)).strip()
+        opt_lower = opt_text.lower()
+        opt_norm = _re.sub(r'[^\w\s]', '', opt_lower).strip()
+
+        # Letter match on visible option text
+        if target_letter and opt_norm.upper() == target_letter:
+            if await safe_click(opt, f"option text letter '{target_letter}'"):
+                print(f"[form_bot] Selected option via text letter '{target_letter}'")
+                return
+
+        # Text match
+        for target in search_targets:
+            if target and (target == opt_lower or target == opt_norm or target in opt_lower or opt_lower in target):
+                if await safe_click(opt, f"option text '{opt_text}'"):
+                    print(f"[form_bot] Selected option via text match '{opt_text}'")
                     return
 
-    # Third pass: substring containment
+    # 3. Inner Spans / Labels Match Pass
     for opt in options:
-        opt_text = await _get_option_text(opt)
-        if opt_text:
-            opt_lower = opt_text.lower().strip()
-            if answer_lower in opt_lower or opt_lower in answer_lower:
-                if await safe_click(opt, f"option (substring) '{opt_text}'"):
-                    return
+        spans = await opt.query_selector_all("span, div, label")
+        for s in spans:
+            stxt = (await s.inner_text()).strip().lower()
+            snorm = _re.sub(r'[^\w\s]', '', stxt).strip()
+            for target in search_targets:
+                if target and (target == stxt or target == snorm or target in stxt or stxt in target):
+                    if await safe_click(opt, f"inner element '{stxt}'"):
+                        print(f"[form_bot] Selected option via inner element match '{stxt}'")
+                        return
 
-    # Fallback: match labels ONLY inside option containers (avoid question text, "Required" etc.)
-    option_containers = await block.query_selector_all(f'div[role="{role}"], label[data-value]')
-    for container in option_containers:
-        labels = await container.query_selector_all("label, span")
-        for label in labels:
-            label_text = (await label.inner_text()).strip().lower()
-            if label_text and (label_text == answer_lower or answer_lower in label_text):
-                if await safe_click(container, f"label '{label_text}'"):
-                    return
-
-    # Last resort: click first option (better than leaving a required field blank)
+    # Last Resort Fallback: Click first available option so form field is never left blank
     if options:
-        print(f"[form_bot] Could not match option '{answer}', clicking first available")
-        try:
-            await options[0].scroll_into_view_if_needed()
-            await options[0].click(force=True)
-        except Exception as e:
-            print(f"[form_bot] ⚠️ Last resort click failed: {str(e)}")
+        print(f"[form_bot] Warning: Could not match option for answer '{answer}', clicking first option as fallback.")
+        await safe_click(options[0], "first available option fallback")
+
+
+def _are_options_complete(options: list[str]) -> bool:
+    """
+    Check if DOM extracted options are complete and non-bare.
+    Returns True if options exist and are NOT just bare single-letter labels ('A', 'B', 'C', 'D').
+    """
+    if not options or len(options) < 2:
+        return False
+    if all(len(o.strip()) <= 2 for o in options):
+        return False
+    return True
+
+
+def _deduplicate_options(options: list[str]) -> list[str]:
+    """
+    Remove duplicate option values and duplicate letter prefixes.
+    Example: ['a) 3', '1', '8', '3'] -> ['a) 3', '1', '8']
+    """
+    if not options:
+        return []
+
+    unique_options = []
+    seen_normalized = set()
+    seen_letter_labels = set()
+
+    for opt in options:
+        opt_str = opt.strip()
+        if not opt_str:
+            continue
+
+        match = re.match(r'^(?:\()?([A-Ea-e1-5])[\.\):\s\-]\s*(.+)$', opt_str)
+        if match:
+            label = match.group(1).upper()
+            content = match.group(2).strip().lower()
+
+            if label in seen_letter_labels:
+                print(f"[form_bot] Deduplicator: Removed duplicate option label '{label}' in '{opt_str}'")
+                continue
+            if content in seen_normalized:
+                print(f"[form_bot] Deduplicator: Removed duplicate option value '{content}' in '{opt_str}'")
+                continue
+
+            seen_letter_labels.add(label)
+            seen_normalized.add(content)
+            unique_options.append(opt_str)
+        else:
+            norm_content = opt_str.lower()
+            if norm_content in seen_normalized:
+                print(f"[form_bot] Deduplicator: Removed duplicate option value '{opt_str}'")
+                continue
+            seen_normalized.add(norm_content)
+            unique_options.append(opt_str)
+
+    return unique_options
+
+
+def _clean_and_validate_options(options: list[str], question_text: str) -> list[str]:
+    """
+    Validate and clean parsed option choices.
+    Removes malformed option fragments and handles duplicate option labels.
+    """
+    if not options:
+        return []
+
+    cleaned = []
+    seen_labels = set()
+
+    for opt in options:
+        opt_str = opt.strip()
+        if not opt_str:
+            continue
+
+        # Match labels like "A. Sister", "A) Sister", "A: Sister"
+        match = re.match(r'^([A-Ea-e])[\.\):]\s*(.+)$', opt_str)
+        if match:
+            label = match.group(1).upper()
+            content = match.group(2).strip()
+
+            # FIRST: Reject question text fragments matching inside the body
+            if len(content) > 8 and content.lower() in question_text.lower() and "?" in question_text:
+                print(f"[form_bot] Warning: Rejecting malformed fragment matching question text: '{opt_str}'")
+                continue
+
+            # SECOND: Reject duplicate labels
+            if label in seen_labels:
+                print(f"[form_bot] Warning: Rejecting duplicate option label '{label}' in '{opt_str}'")
+                continue
+
+            seen_labels.add(label)
+            cleaned.append(opt_str)
+        else:
+            cleaned.append(opt_str)
+
+    return cleaned if len(cleaned) >= 2 else options
+
+
+def _extract_embedded_options(full_text: str) -> tuple[list[str], dict[str, str]]:
+    """
+    Fallback parser: Extract embedded options (e.g. A) Sister B) Cousin) from full block text.
+    Supports multiline and inline choices.
+    """
+    option_map = {}
+    full_options = []
+
+    # 1. Inline or multiline pattern: letter A-E followed by '.' or ')' or ':' (NOT ',')
+    pattern = re.compile(r'(?:^|\n|\s+)(?:\()?([A-E])[\.\):]\s+([A-Za-z0-9\$\#\-\+\%\s]{1,40}?)(?=\s+(?:\()?([A-E])[\.\):]|\s*$|\n)')
+
+    matches = pattern.findall(full_text)
+    for match in matches:
+        letter = match[0].upper()
+        val = match[1].strip().rstrip('.,;')
+        if val and letter not in option_map and len(val) < 60:
+            option_map[letter] = val
+
+    # 2. Line-by-line fallback starting with A-E followed strictly by . or ) or :
+    if len(option_map) < 2:
+        lines = [l.strip() for l in full_text.splitlines() if l.strip()]
+        line_pattern = re.compile(r'^\s*(?:\()?([A-E])[\.\):]\s+(.+)$')
+        for line in lines:
+            m = line_pattern.match(line)
+            if m:
+                letter = m.group(1).upper()
+                val = m.group(2).strip().rstrip('.,;')
+                if val and letter not in option_map and len(val) < 60:
+                    option_map[letter] = val
+
+    if len(option_map) >= 2 and 'A' in option_map and 'B' in option_map:
+        for letter in sorted(option_map.keys()):
+            full_options.append(f"{letter}. {option_map[letter]}")
+        print(f"[form_bot] Fallback parser recovered embedded option map: {option_map}")
+        return full_options, option_map
+
+    return [], {}
+
+
+def _validate_question_for_ai(q_data: dict) -> bool:
+    """
+    Validation step: Ensure question text and options are valid before sending to AI.
+    Checks:
+    - At least 2 options present for choice questions.
+    - No empty strings or malformed options.
+    - Options deduplicated.
+    """
+    if not q_data or not q_data.get("question_text"):
+        return False
+
+    q_type = q_data.get("type")
+    options = q_data.get("options", [])
+
+    if q_type in ("radio", "checkbox", "dropdown"):
+        if not options or len(options) < 2:
+            print(f"[form_bot] Validation Warning: Less than 2 options for '{q_data['question_text'][:40]}...'")
+            return False
+        if any(not str(o).strip() for o in options):
+            print(f"[form_bot] Validation Warning: Empty option in '{q_data['question_text'][:40]}...'")
+            return False
+
+    return True
 
 
 async def _get_option_text(opt: ElementHandle) -> str:
     """
-    Extract the best text representation of an option element.
-    IMPORTANT: Prefer the full readable text over data-value,
-    because data-value is often just a letter label like 'A', 'B'.
+    Extract the cleanest text representation of an option element in Google Forms.
     """
-    # First try: get the FULL visible text (most reliable for actual option content)
-    # Try finding an internal span or label with the option text
-    inner_label = await opt.query_selector('span, div[dir="auto"], label')
-    if inner_label:
-        txt = (await inner_label.inner_text()).strip()
-        if txt and len(txt) > 1:  # Skip single-char labels like "A", "B"
+    # 1. Google Forms specific label text selector
+    gform_label = await opt.query_selector(
+        'span.docssharedWizToggleLabeledLabelText, '
+        '.docssharedWizToggleLabeledContent, '
+        'div[dir="auto"] span'
+    )
+    if gform_label:
+        txt = (await gform_label.inner_text()).strip()
+        if txt:
             return txt
 
-    # Second try: full inner text of the option element
+    # 2. Direct inner text of the radio option element (first line only)
     full_text = (await opt.inner_text()).strip()
-    if full_text and len(full_text) > 1:
-        return full_text
+    if full_text:
+        first_line = full_text.split('\n')[0].strip()
+        if first_line:
+            return first_line
 
-    # Third try: aria-label (often has the full option text)
+    # 3. aria-label attribute
     aria_label = await opt.get_attribute("aria-label")
-    if aria_label and aria_label.strip() and len(aria_label.strip()) > 1:
+    if aria_label and aria_label.strip():
         return aria_label.strip()
 
-    # Fourth try: data-value (often just a letter, but use as last resort)
+    # 4. data-value attribute
     data_val = await opt.get_attribute("data-value")
     if data_val and data_val.strip():
         return data_val.strip()
 
-    # Absolute fallback
-    return full_text if full_text else ""
+    return ""
 
 
 async def _read_score(page: Page) -> str:

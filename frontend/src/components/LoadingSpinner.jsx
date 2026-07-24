@@ -16,7 +16,6 @@ export const LoadingSpinner = ({
   size = "md",
   text = "Loading...",
   fullScreen = false,
-  color = "#00bfff",
 }) => {
   // Get size dimensions
   const sizeMap = {

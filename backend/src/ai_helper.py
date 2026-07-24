@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import re
 import time
@@ -22,11 +22,10 @@ def get_deepseek_client():
 
 # Models to try in order of preference (verified March 2026 Gemini models)
 MODELS_TO_TRY = [
-    "gemini-2.5-flash",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
+    "gemini-flash-latest",        # Always latest Flash model
+    "gemini-flash-lite-latest",   # Always latest Flash Lite model
+    "gemini-pro-latest",          # Always latest Pro model
 ]
-
 # Deepseek models
 DEEPSEEK_MODELS = ["deepseek-chat"]
 
@@ -54,15 +53,20 @@ def answer_questions(questions: list[dict], user_profile: dict = None, form_titl
         form_context = f"\nFORM/QUIZ CONTEXT: This quiz is titled \"{form_title}\". Use this to understand the subject domain.\n"
 
     prompt_parts = [
-        "You are an elite expert with mastery across ALL academic subjects.\n\n"
-        "YOUR #1 GOAL: Get EVERY answer CORRECT.\n\n"
-        "STRICT RULES:\n"
-        "1. For MULTIPLE CHOICE questions: Return ONLY the exact content string of the option you choose.\n"
-        "2. For CHECKBOX questions: Select ALL correct options separated by ' | '\n"
-        "3. For SHORT TEXT: Provide ONLY the final answer.\n"
+        "SYSTEM DIRECTIVE: You are an Elite Grandmaster Competitive Exam Genius with 100% precision in Logical Reasoning, Quantitative Aptitude, Data Interpretation, Mathematics, Verbal Ability, Science, and General Knowledge.\n\n"
+        "YOUR MISSION: Solve EVERY question with HIGHEST POSSIBLE ACCURACY and ZERO mistakes.\n\n"
+        "EXPERT PROBLEM-SOLVING RULES:\n"
+        "1. SEATING ARRANGEMENTS & PUZZLES: Trace relative positions, facing directions (inside/outside), and seating orders step-by-step.\n"
+        "2. BLOOD RELATIONS: Build family trees generation-by-generation to deduce exact relations.\n"
+        "3. SYLLOGISMS: Strictly test conclusions using formal Venn diagram logic.\n"
+        "4. MATHEMATICS & SERIES: Solve exact algebraic equations, double-check arithmetic calculations, and verify number series patterns.\n"
+        "5. OPTION MATCHING: Select the option string from the provided 'Options' array that EXACTLY matches your calculated solution.\n\n"
+        "STRICT OUTPUT FORMAT:\n"
+        "- Return ONLY a valid JSON array of answer strings, one per question.\n"
+        "- Example format: [\"A. Sister\", \"42\", \"Option X | Option Y\"]\n"
         f"{profile_context}"
         f"{form_context}\n"
-        "QUESTIONS TO SOLVE:"
+        "QUESTIONS TO SOLVE WITH 100% ACCURACY:"
     ]
 
     for i, q in enumerate(questions, 1):
@@ -78,13 +82,46 @@ def answer_questions(questions: list[dict], user_profile: dict = None, form_titl
 
     prompt = "\n".join(prompt_parts)
 
-    # Try Gemini Models
-    api_key = os.getenv("gemini_api_key")
-    if api_key:
+    def try_deepseek():
+        ds_client = get_deepseek_client()
+        if not ds_client:
+            return None
+        for ds_model in DEEPSEEK_MODELS:
+            try:
+                print(f"[ai_helper] Querying DeepSeek model '{ds_model}'...")
+                response = ds_client.chat.completions.create(
+                    model=ds_model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.0
+                )
+                response_text = response.choices[0].message.content.strip()
+                json_match = re.search(r"\[.*\]", response_text, re.DOTALL)
+                if json_match:
+                    response_text = json_match.group(0)
+                
+                answers = json.loads(response_text)
+                validated_answers = []
+                for idx, ans in enumerate(answers):
+                    if idx < len(questions):
+                        validated_answers.append(_validate_answer(ans, questions[idx]))
+                return validated_answers
+            except Exception as e:
+                err_str = str(e)
+                if "402" in err_str or "Insufficient Balance" in err_str:
+                    print(f"[ai_helper] ⚠️ DeepSeek API Notice: Insufficient Balance (402). Falling back to Gemini...")
+                else:
+                    print(f"[ai_helper] ⚠️ DeepSeek error ({ds_model}): {e}")
+                return None
+
+    def try_gemini():
+        api_key = os.getenv("gemini_api_key")
+        if not api_key:
+            return None
         try:
             client = get_client()
             for model_name in MODELS_TO_TRY:
-                for attempt in range(RATE_LIMIT_RETRIES + 1):
+                print(f"[ai_helper] Querying Gemini model '{model_name}'...")
+                for attempt in range(3):  # 3 fast attempts
                     try:
                         response = client.models.generate_content(
                             model=model_name,
@@ -109,37 +146,33 @@ def answer_questions(questions: list[dict], user_profile: dict = None, form_titl
                         return validated_answers
                     except Exception as e:
                         error_msg = str(e).lower()
-                        if "429" in error_msg or "rate" in error_msg:
-                            if attempt < RATE_LIMIT_RETRIES:
-                                time.sleep(RATE_LIMIT_DELAY)
+                        print(f"[ai_helper] ⚠️ Gemini model '{model_name}' attempt {attempt+1} error: {e}")
+                        if "429" in error_msg or "rate" in error_msg or "resource_exhausted" in error_msg:
+                            if attempt < 2:
+                                time.sleep(2)
                                 continue
                         break # Next model
-        except:
-            pass
+        except Exception as e:
+            print(f"[ai_helper] ⚠️ Gemini client error: {e}")
+        return None
 
-    # Try Deepseek Fallback
-    ds_client = get_deepseek_client()
-    if ds_client:
-        for ds_model in DEEPSEEK_MODELS:
-            try:
-                response = ds_client.chat.completions.create(
-                    model=ds_model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.0
-                )
-                response_text = response.choices[0].message.content.strip()
-                json_match = re.search(r"\[.*\]", response_text, re.DOTALL)
-                if json_match:
-                    response_text = json_match.group(0)
-                
-                answers = json.loads(response_text)
-                validated_answers = []
-                for idx, ans in enumerate(answers):
-                    if idx < len(questions):
-                        validated_answers.append(_validate_answer(ans, questions[idx]))
-                return validated_answers
-            except:
-                continue
+    # Check preference in .env (defaults to Gemini first, then DeepSeek fallback)
+    preferred_provider = os.getenv("PREFERRED_AI_PROVIDER", "gemini").lower()
+
+    if preferred_provider == "deepseek":
+        res = try_deepseek()
+        if res:
+            return res
+        res = try_gemini()
+        if res:
+            return res
+    else:
+        res = try_gemini()
+        if res:
+            return res
+        res = try_deepseek()
+        if res:
+            return res
 
     return ["Unable to determine answer"] * len(questions)
 

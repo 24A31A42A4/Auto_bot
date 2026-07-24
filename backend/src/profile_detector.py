@@ -3,37 +3,30 @@ profile_detector.py — Personal field keyword matching.
 Checks each question text against keyword lists to decide whether to fill
 from the user profile or send to Gemini AI.
 
-Uses word-boundary matching to avoid false positives (e.g. "Name the capital"
-should NOT match as a personal "name" field).
+Uses word-boundary matching, length checks, and quiz-indicator filtering
+to prevent quiz questions (e.g. math word problems containing "year") from
+matching as personal fields.
 """
 
 import re
 
 # Keywords that indicate a question is a quiz/academic question, NOT a personal field.
-# If any of these appear in the question, skip personal field detection.
 QUIZ_INDICATORS = [
-    "what are the", "what was", "what were",
+    "what is the", "what is a", "what is an", "what are the", "what was", "what were",
     "explain", "define", "describe", "how many", "how much", "how does",
     "how is", "how are", "how do", "why is", "why are", "why does",
-    "calculate", "find the", "solve", "compute", "evaluate",
+    "calculate", "find the", "solve", "compute", "evaluate", "value of",
     "identify", "list the", "mention", "state the",
     "true or false", "select the", "choose the",
     "name the", "name a", "name any", "name two", "name three",
     "give an example", "write a program", "what type",
+    "if the", "then find", "depreciates", "statements:", "following:",
+    "pointing to", "sum of", "ratio", "percentage", "arithmetic progression",
+    "each year", "in 3 years", "end of", "beginning of",
 ]
 
-# Keyword mappings: if the question text contains any of these keywords
-# as whole words, the corresponding profile field is used instead of Gemini AI.
+# Keyword mappings: order matters — check specific fields like roll_number/section/college before bare name
 KEYWORD_MAP = {
-    "name": {
-        "keywords": [
-            r"\bname\b",  # Matches standalone "Name" or "Name *"
-            r"\byour\s+name\b", r"\bfull\s+name\b", r"\bstudent\s+name\b",
-            r"\bname\s+of\s+the\s+student\b", r"\bparticipant\s+name\b",
-            r"\bcandidate\s+name\b", r"\benter\s+name\b",
-        ],
-        "profile_field": "name",
-    },
     "roll_number": {
         "keywords": [
             r"\broll\s*(?:no|number|num)\b", r"\broll\b",
@@ -45,6 +38,7 @@ KEYWORD_MAP = {
     },
     "section": {
         "keywords": [
+            r"\bcollege\s+name\b", r"\bname\s+of\s+the\s+institution\b",
             r"\bsection\b", r"\bclass\s+section\b",
             r"\bcollege\b", r"\binstitution\b", r"\buniversity\b", r"\binstitute\b",
         ],
@@ -76,27 +70,43 @@ KEYWORD_MAP = {
         ],
         "profile_field": "phone_number",
     },
+    "name": {
+        "keywords": [
+            r"\byour\s+name\b", r"\bfull\s+name\b", r"\bstudent\s+name\b",
+            r"\bname\s+of\s+the\s+student\b", r"\bparticipant\s+name\b",
+            r"\bcandidate\s+name\b", r"\benter\s+name\b", r"\bname\b",
+        ],
+        "profile_field": "name",
+    },
 }
 
 
 def detect_personal_field(question_text: str) -> str | None:
     """
     Check if a question is asking for personal information.
-    Uses word-boundary regex matching and quiz-indicator filtering
-    to avoid false positives.
+    Uses length thresholds, word-boundary regex, and quiz-indicator filtering
+    to avoid false positives on academic quiz questions.
     """
     question_lower = question_text.lower().strip()
 
-    # First check: if the question looks like a quiz/academic question, skip detection
+    # 1. Long questions (>45 chars) with question numbering, question mark or problem phrases are quiz items
+    if len(question_lower) > 45:
+        if re.search(r'^\d+[\.\)]', question_lower) or '?' in question_lower or re.search(r'\b(if|then|find|value|total|sum|count|each|per|number of|depreciates)\b', question_lower):
+            return None
+
+    # 2. Check quiz indicators
     for indicator in QUIZ_INDICATORS:
         if indicator in question_lower:
             return None
 
-    # Second check: match against keyword patterns (word-boundary aware)
+    # 3. Match against keyword patterns (word-boundary aware)
     for field, info in KEYWORD_MAP.items():
         for pattern in info["keywords"]:
             if re.search(pattern, question_lower):
-                print(f"[profile_detector] ✅ MATCH: '{question_lower}' matched pattern '{pattern}' -> field '{info['profile_field']}'")
+                # Extra safety: bare "year", "section", "branch", "roll" must not match long text > 35 chars
+                if pattern in (r"\byear\b", r"\bsection\b", r"\bbranch\b", r"\broll\b") and len(question_lower) > 35:
+                    continue
+                print(f"[profile_detector] MATCH: '{question_lower[:40]}...' matched pattern '{pattern}' -> field '{info['profile_field']}'")
                 return info["profile_field"]
 
     return None

@@ -9,14 +9,6 @@ from dotenv import load_dotenv, find_dotenv
 import os
 import sys
 
-# Vercel Playwright Support
-if os.getenv("VERCEL"):
-    try:
-        import playwright
-        vercel_playwright.install()
-    except ImportError:
-        pass
-
 load_dotenv(find_dotenv())
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -332,7 +324,7 @@ async def api_fill_form(request: Request, form_req: FormRequest, background_task
             save_form_history(auth_id, form_req.url, title, score, score_url=score_url)
             
             # If successful, increment counter
-            if "Score:" in score or "successfully" in score:
+            if score and isinstance(score, str) and ("Score:" in score or "successfully" in score):
                 increment_forms_filled(user_profile["phone_number"])
         except Exception as e:
             bot_status[auth_id]["logs"].append(f"Error: {str(e)}")
