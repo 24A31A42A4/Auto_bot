@@ -231,6 +231,12 @@ async def update_profile_by_auth(auth_id: str, profile: ProfileUpdate):
 # ─── Health Check ─────────────────────────────────────────────────────
 
 
+@app.get("/")
+@app.get("/api")
+async def root():
+    """Root welcome endpoint for API check."""
+    return {"status": "ok", "service": "AutoForm Bot API", "health": "/health"}
+
 @app.get("/health")
 async def health_check():
     """Health check endpoint for Render uptime monitoring."""
